@@ -234,7 +234,7 @@ std::pair<bool, bool> AliasSet::hasUnsafeOwnsemAccesses() const {
   return std::make_pair(Unsafe, FoundOwnSemData);
 }                            
 
-std::optional<bool> AliasSet::CBMoveOrBorrowMem(Value *V) const {
+std::optional<bool> AliasSet::cbMoveOrBorrowMem(Value *V) const {
   if (!isa<CallInst>(V) || !isa<InvokeInst>(V)) {
     return std::nullopt;
   }

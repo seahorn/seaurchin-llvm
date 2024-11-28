@@ -2356,7 +2356,7 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
       auto UnsafePair = Pair.getPointer()->hasUnsafeOwnsemAccesses();
       Pairpair.setInt(!UnsafePair.first); /* set set safety info */
       ModRefInfo MR = Pair.getPointer()->aliasesUnknownInst(I, BatchAA);
-      std::optional<bool> TransferToArg = Pair.getPointer()->CBMoveOrBorrowMem(I);
+      std::optional<bool> TransferToArg = Pair.getPointer()->cbMoveOrBorrowMem(I);
       LLVM_DEBUG(dbgs() << "Collect promotables, set Unsafety is: " << UnsafePair.first 
           << " found ownsem: " << UnsafePair.second << "\n";);
       // Pair.getPointer()->print(OS);
