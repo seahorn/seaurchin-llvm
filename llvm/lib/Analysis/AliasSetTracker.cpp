@@ -12,13 +12,17 @@
 
 #include "llvm/Analysis/AliasSetTracker.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/GuardUtils.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Argument.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PassManager.h"
@@ -27,11 +31,14 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/AtomicOrdering.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
+#include <utility>
 
 using namespace llvm;
 
@@ -198,6 +205,53 @@ ModRefInfo AliasSet::aliasesUnknownInst(const Instruction *Inst,
   }
 
   return MR;
+}
+
+std::pair<bool, bool> AliasSet::hasUnsafeOwnsemAccesses() const {
+  bool Unsafe = false;
+  bool FoundOwnSemData = false;
+  llvm::StringRef OwnsemKind = "ownsem";
+  
+  for (auto *Ptr: getPointers()) {
+    MDNode* OwnsemMetadata = nullptr;
+    bool HasNoAliasAttr = false;
+    if (isa<Instruction>(Ptr)) {
+      auto *Inst = cast<Instruction>(Ptr);
+      OwnsemMetadata = Inst->getMetadata(OwnsemKind);   
+    } else if (isa<Instruction>(Ptr)) {
+      auto *Call = cast<Instruction>(Ptr);
+      OwnsemMetadata = Call->getMetadata(OwnsemKind);   
+    } else if (isa<Argument>(Ptr)) {
+      auto *Arg = cast<Argument>(Ptr);
+      HasNoAliasAttr = Arg->hasNoAliasAttr();
+    } 
+    FoundOwnSemData = !(OwnsemMetadata == nullptr);
+    if (!OwnsemMetadata && !HasNoAliasAttr) {
+      Unsafe = true;
+      break;
+    }
+  }
+  return std::make_pair(Unsafe, FoundOwnSemData);
+}                            
+
+std::optional<bool> AliasSet::CBMoveOrBorrowMem(Value *V) const {
+  if (!isa<CallInst>(V) || !isa<InvokeInst>(V)) {
+    return std::nullopt;
+  }
+  auto* CB = cast<CallBase>(V);
+  llvm::SmallPtrSet<Value *, 4> CBPtrSet;
+  for (unsigned Idx = 0; Idx < CB->arg_size(); ++Idx) {
+    if (CB->getArgOperand(Idx)->getType()->isPointerTy()) {
+      Value *ArgPtr = CB->getArgOperand(Idx);
+      CBPtrSet.insert(ArgPtr);
+    }
+  }
+  for (auto* ASPtr: getPointers()) {
+    if (CBPtrSet.contains(ASPtr)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 AliasSet::PointerVector AliasSet::getPointers() const {

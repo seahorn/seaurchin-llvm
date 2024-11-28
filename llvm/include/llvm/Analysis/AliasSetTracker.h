@@ -27,6 +27,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/ValueHandle.h"
 #include <cassert>
+#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -130,6 +131,17 @@ public:
 
   void print(raw_ostream &OS) const;
   void dump() const;
+
+  /// Check if the AliasSet has any unsafe (not marked with "ownsem" metadata) 
+  /// accesses.
+  /// Return a pair with first (UnsafeAccesses) and second (uses "ownsem" metadata 
+  /// apart from arg attribute)
+  std::pair<bool, bool> hasUnsafeOwnsemAccesses() const;            
+
+  /// Returns true if CallBase moves or borrows memory.
+  /// Returns false if CallBase does not move or borrow memory.
+  /// Returns nullopt if it cannot determine.
+  std::optional<bool> cbMoveOrBorrowMem(Value *V) const;
 
 private:
   // Can only be created by AliasSetTracker.

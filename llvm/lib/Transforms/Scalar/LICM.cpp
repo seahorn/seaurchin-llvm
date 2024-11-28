@@ -40,6 +40,7 @@
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AliasSetTracker.h"
 #include "llvm/Analysis/AssumptionCache.h"
@@ -65,6 +66,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IRBuilder.h"
@@ -75,6 +77,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ModRef.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
@@ -84,6 +87,7 @@
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 #include <algorithm>
+#include <optional>
 #include <utility>
 using namespace llvm;
 
@@ -110,6 +114,12 @@ STATISTIC(NumAddSubHoisted, "Number of add/subtract expressions reassociated "
                             "and hoisted out of the loop");
 STATISTIC(NumFPAssociationsHoisted, "Number of invariant FP expressions "
                                     "reassociated and hoisted out of the loop");
+STATISTIC(NumLoadNotPromoted, "Number of missed load promotions");
+STATISTIC(NumLoadNotDerefInPH, "Number of missed load promotions due "
+                               "to underef in pre-header");
+STATISTIC(NumLoadAtomic, "Number of missed load promotions due "
+                               "to atomic restrictions");
+
 
 /// Memory promotion is enabled by default.
 static cl::opt<bool>
@@ -158,6 +168,17 @@ cl::opt<unsigned> llvm::SetLicmMssaNoAccForPromotionCap(
              "number of accesses allowed to be present in a loop in order to "
              "enable memory promotion."));
 
+// Ownsem: Use ownership semantics for finding promotable instructions
+static cl::opt<bool> LicmUsesOwnSem(
+    "licm-uses-ownsem", cl::init(false), cl::Hidden,
+    cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used for"
+              " increasing number of promotable MustAlias sets."));
+
+static cl::opt<bool> LicmOwnSemSafeSetIgnoresThrow(
+    "licm-ownsem-safeset-ignores-throw", cl::init(false), cl::Hidden,
+    cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used for"
+              " increasing number of promotable MustAlias sets."));
+        
 static bool inSubLoop(BasicBlock *BB, Loop *CurLoop, LoopInfo *LI);
 static bool isNotUsedOrFoldableInLoop(const Instruction &I, const Loop *CurLoop,
                                       const LoopSafetyInfo *SafetyInfo,
@@ -200,7 +221,7 @@ static void moveInstructionBefore(Instruction &I, BasicBlock::iterator Dest,
 static void foreachMemoryAccess(MemorySSA *MSSA, Loop *L,
                                 function_ref<void(Instruction *)> Fn);
 using PointersAndHasReadsOutsideSet =
-    std::pair<SmallSetVector<Value *, 8>, bool>;
+    std::tuple<SmallSetVector<Value *, 8>, bool, bool /* safeset */>;
 static SmallVector<PointersAndHasReadsOutsideSet, 0>
 collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L);
 
@@ -498,12 +519,12 @@ bool LoopInvariantCodeMotion::runOnLoop(Loop *L, AAResults *AA, LoopInfo *LI,
       bool LocalPromoted;
       do {
         LocalPromoted = false;
-        for (auto [PointerMustAliases, HasReadsOutsideSet] :
+        for (auto [PointerMustAliases, HasReadsOutsideSet, IsSafeSet] :
              collectPromotionCandidates(MSSA, AA, L)) {
           LocalPromoted |= promoteLoopAccessesToScalars(
               PointerMustAliases, ExitBlocks, InsertPts, MSSAInsertPts, PIC, LI,
               DT, AC, TLI, TTI, L, MSSAU, &SafetyInfo, ORE,
-              LicmAllowSpeculation, HasReadsOutsideSet);
+              LicmAllowSpeculation, HasReadsOutsideSet, IsSafeSet);
         }
         Promoted |= LocalPromoted;
       } while (LocalPromoted);
@@ -1498,7 +1519,7 @@ static void moveInstructionBefore(Instruction &I, BasicBlock::iterator Dest,
                                   ScalarEvolution *SE) {
   SafetyInfo.removeInstruction(&I);
   SafetyInfo.insertInstructionTo(&I, Dest->getParent());
-  I.moveBefore(*Dest->getParent(), Dest);
+  I.moveBefore(*Dest->getParent(), Dest);         
   if (MemoryUseOrDef *OldMemAcc = cast_or_null<MemoryUseOrDef>(
           MSSAU.getMemorySSA()->getMemoryAccess(&I)))
     MSSAU.moveToPlace(OldMemAcc, Dest->getParent(),
@@ -1731,6 +1752,8 @@ static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
     return OptimizationRemark(DEBUG_TYPE, "Hoisted", &I) << "hoisting "
                                                          << ore::NV("Inst", &I);
   });
+  llvm::StringRef OwnsemKind = "ownsem";
+  auto* OwnsemMetadata = I.getMetadata(OwnsemKind);  
 
   // Metadata can be dependent on conditions we are hoisting above.
   // Conservatively strip all metadata on the instruction unless we were
@@ -1754,7 +1777,11 @@ static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
     // Move the new node to the destination block, before its terminator.
     moveInstructionBefore(I, Dest->getTerminator()->getIterator(), *SafetyInfo,
                           MSSAU, SE);
-
+  // ownsem: we assumethat hoisting does not invalidate
+  // ownership data
+  if (OwnsemMetadata) {
+    I.setMetadata(OwnsemKind, OwnsemMetadata);  
+  }       
   I.updateLocationAfterHoist();
 
   if (isa<LoadInst>(I))
@@ -1958,7 +1985,7 @@ bool llvm::promoteLoopAccessesToScalars(
     const TargetLibraryInfo *TLI, TargetTransformInfo *TTI, Loop *CurLoop,
     MemorySSAUpdater &MSSAU, ICFLoopSafetyInfo *SafetyInfo,
     OptimizationRemarkEmitter *ORE, bool AllowSpeculation,
-    bool HasReadsOutsideSet) {
+    bool HasReadsOutsideSet, bool IsSafeSet) {
   // Verify inputs.
   assert(LI != nullptr && DT != nullptr && CurLoop != nullptr &&
          SafetyInfo != nullptr &&
@@ -2045,7 +2072,10 @@ bool llvm::promoteLoopAccessesToScalars(
     // this by proving that the caller can't have a reference to the object
     // after return and thus can't possibly load from the object.
     Value *Object = getUnderlyingObject(SomePtr);
-    if (!isNotVisibleOnUnwindInLoop(Object, CurLoop, DT))
+    // if set is safe then don't upgrade StoreSafety
+    if (LicmUsesOwnSem && LicmOwnSemSafeSetIgnoresThrow && IsSafeSet) {
+      // do nothing
+    } else if (!isNotVisibleOnUnwindInLoop(Object, CurLoop, DT))
       StoreSafety = StoreUnsafe;
   }
 
@@ -2061,7 +2091,7 @@ bool llvm::promoteLoopAccessesToScalars(
         continue;
 
       // If there is an non-load/store instruction in the loop, we can't promote
-      // it.
+      // it.  
       if (LoadInst *Load = dyn_cast<LoadInst>(UI)) {
         if (!Load->isUnordered())
           return false;
@@ -2153,18 +2183,21 @@ bool llvm::promoteLoopAccessesToScalars(
   // access, bail.  We can't blindly promote non-atomic to atomic since we
   // might not be able to lower the result.  We can't downgrade since that
   // would violate memory model.  Also, align 0 is an error for atomics.
-  if (SawUnorderedAtomic && SawNotAtomic)
+  if (SawUnorderedAtomic && SawNotAtomic) {
+    NumLoadAtomic++;
     return false;
-
+  } 
   // If we're inserting an atomic load in the preheader, we must be able to
   // lower it.  We're only guaranteed to be able to lower naturally aligned
   // atomics.
-  if (SawUnorderedAtomic && Alignment < MDL.getTypeStoreSize(AccessTy))
+  if (SawUnorderedAtomic && Alignment < MDL.getTypeStoreSize(AccessTy)) {
+    NumLoadAtomic++;
     return false;
-
+  } 
   // If we couldn't prove we can hoist the load, bail.
   if (!DereferenceableInPH) {
     LLVM_DEBUG(dbgs() << "Not promoting: Not dereferenceable in preheader\n");
+    NumLoadNotDerefInPH++;
     return false;
   }
 
@@ -2184,9 +2217,11 @@ bool llvm::promoteLoopAccessesToScalars(
 
   // If we've still failed to prove we can sink the store, hoist the load
   // only, if possible.
-  if (StoreSafety != StoreSafe && !FoundLoadToPromote)
+  if (StoreSafety != StoreSafe && !FoundLoadToPromote) {
     // If we cannot hoist the load either, give up.
-    return false;
+    NumLoadNotPromoted++;
+    return false;       
+  }
 
   // Lets do the promotion!
   if (StoreSafety == StoreSafe) {
@@ -2291,10 +2326,10 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
   });
 
   // We're only interested in must-alias sets that contain a mod.
-  SmallVector<PointerIntPair<const AliasSet *, 1, bool>, 8> Sets;
+  SmallVector<PointerIntPair<PointerIntPair<const AliasSet *, 1, bool>, 1, bool /* safeset */>, 8> Sets;
   for (AliasSet &AS : AST)
     if (!AS.isForwardingAliasSet() && AS.isMod() && AS.isMustAlias())
-      Sets.push_back({&AS, false});
+      Sets.push_back({{&AS, false}, false /* safe set*/});
 
   if (Sets.empty())
     return {}; // Nothing to promote...
@@ -2304,28 +2339,98 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
     if (AttemptingPromotion.contains(I))
       return;
 
-    llvm::erase_if(Sets, [&](PointerIntPair<const AliasSet *, 1, bool> &Pair) {
+    auto PrintUses = [&](SmallVector<const Value *, 8> PointerMustAliases) {
+      for (const Value *ASIV : PointerMustAliases) {
+        for (const Use &U : ASIV->uses()) {
+          // Ignore instructions that are outside the loop.
+          Instruction *UI = dyn_cast<Instruction>(U.getUser());
+          if (!UI || !L->contains(UI))
+            continue; 
+          LLVM_DEBUG(dbgs() << "Pointer " << *ASIV << " used by " << *UI <<" \n";); 
+        }
+      }      
+    }; 
+
+    auto MayAliasOutSideSetOwnsem = [&](PointerIntPair<PointerIntPair<const AliasSet *, 1, bool>, 1, bool /* safeset*/> &Pairpair) {
+      auto Pair = Pairpair.getPointer();
+      auto UnsafePair = Pair.getPointer()->hasUnsafeOwnsemAccesses();
+      Pairpair.setInt(!UnsafePair.first); /* set set safety info */
+      ModRefInfo MR = Pair.getPointer()->aliasesUnknownInst(I, BatchAA);
+      std::optional<bool> TransferToArg = Pair.getPointer()->CBMoveOrBorrowMem(I);
+      LLVM_DEBUG(dbgs() << "Collect promotables, set Unsafety is: " << UnsafePair.first 
+          << " found ownsem: " << UnsafePair.second << "\n";);
+      // Pair.getPointer()->print(OS);
+      LLVM_DEBUG(dbgs() << "Aliases unknown instr: " << *I << " mod: " 
+        << isModSet(MR) << " ref:" << isRefSet(MR) << "\n";);
+      
+      if (isModSet(MR) && !UnsafePair.first && TransferToArg && TransferToArg.value() == false) {
+        LLVM_DEBUG(dbgs() << "Collect promotables will NOT erase AliasSet " 
+              << (const void*)Pair.getPointer() << "and " << *I << "\n";);
+        PrintUses(Pair.getPointer()->getPointers());
+        return false;
+      } 
+      if (isModSet(MR)) {
+      // Cannot promote if there are writes outside the set.
+        LLVM_DEBUG(dbgs() << "Collect promotables will erase AliasSet " 
+              << (const void*)Pair.getPointer() << "\n";);
+        return true;
+      } 
+      if (isRefSet(MR)) {
+        // Remember reads outside the set.
+
+        LLVM_DEBUG(dbgs() << "Collect promotables will erase (" 
+            << !Pair.getPointer()->isRef() << ") AliasSet " 
+            << (const void*)Pair.getPointer() << "\n";);
+        
+        if (!UnsafePair.first && TransferToArg && TransferToArg.value() == false) {
+          Pairpair.setPointer({Pair.getPointer(), false /* reads outside set*/});
+        } else {
+          Pairpair.setPointer({Pair.getPointer(), true /* reads outside set*/});
+        }
+        if (!UnsafePair.first) {
+          LLVM_DEBUG(dbgs() << "This safe AliasSet can be salvaged!\n";);
+          // PrintUses(Pair.getPointer()->getPointers());      
+          return false;
+        }
+        return !Pair.getPointer()->isRef();
+      }
+      // If this is a mod-only set and there are reads outside the set,
+      // we will not be able to promote, so bail out early.
+      LLVM_DEBUG(dbgs() << "Collect promotables will not erase AliasSet " 
+          << (const void*)Pair.getPointer() << "\n";);  
+      
+      return false;
+    };
+  
+    auto MayAliasOutsideSetDefault = [&](PointerIntPair<PointerIntPair<const AliasSet *, 1, bool>, 1, bool /* safeset */> &Pairpair) {
+      auto Pair = Pairpair.getPointer();
       ModRefInfo MR = Pair.getPointer()->aliasesUnknownInst(I, BatchAA);
       // Cannot promote if there are writes outside the set.
       if (isModSet(MR))
         return true;
       if (isRefSet(MR)) {
         // Remember reads outside the set.
-        Pair.setInt(true);
+        Pairpair.setPointer({Pair.getPointer(), true /* reads outside set*/});
         // If this is a mod-only set and there are reads outside the set,
         // we will not be able to promote, so bail out early.
         return !Pair.getPointer()->isRef();
       }
       return false;
-    });
-  });
+    };
 
-  SmallVector<std::pair<SmallSetVector<Value *, 8>, bool>, 0> Result;
-  for (auto [Set, HasReadsOutsideSet] : Sets) {
+    if (LicmUsesOwnSem) {
+      llvm::erase_if(Sets, MayAliasOutSideSetOwnsem);
+    } else {
+      llvm::erase_if(Sets, MayAliasOutsideSetDefault);
+    }
+  });
+  SmallVector<std::tuple<SmallSetVector<Value *, 8>, bool, bool /* safeset */>, 0> Result;
+  for (auto [SetPair, IsSafeSet] : Sets) {
+    auto [Set, HasReadsOutsideSet] = SetPair;
     SmallSetVector<Value *, 8> PointerMustAliases;
     for (const auto &MemLoc : *Set)
       PointerMustAliases.insert(const_cast<Value *>(MemLoc.Ptr));
-    Result.emplace_back(std::move(PointerMustAliases), HasReadsOutsideSet);
+    Result.emplace_back(std::move(PointerMustAliases), HasReadsOutsideSet, IsSafeSet);
   }
 
   return Result;
