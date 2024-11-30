@@ -1,5 +1,5 @@
 
-name: Build CI Container
+name: Build builddeps Container
 
 permissions:
   contents: read
@@ -20,7 +20,7 @@ on:
 
 jobs:
   build-ci-container:
-    if: github.repository_owner == 'llvm'
+    if: github.repository_owner == 'seaurchin-llvm'
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -30,8 +30,8 @@ jobs:
         run: |
           tag=`date +%s`
           container_name="ghcr.io/$GITHUB_REPOSITORY_OWNER/ci-ubuntu-22.04"
-          echo "container-name=$container_name" >> $GITHUB_OUTPUT
-          echo "container-name-tag=$container_name:$tag" >> $GITHUB_OUTPUT
+          echo "container-name=buildpack-deps-seaurchin" >> $GITHUB_OUTPUT
+          echo "container-name-tag=$container_name:latest" >> $GITHUB_OUTPUT
 
       - name: Checkout LLVM
         uses: actions/checkout@v4
@@ -41,13 +41,13 @@ jobs:
       - name: Build Container
         working-directory: ./.github/workflows/containers/github-action-ci/
         run: |
-          podman build -t ${{ steps.vars.outputs.container-name-tag }} .
-          podman tag ${{ steps.vars.outputs.container-name-tag }} ${{ steps.vars.outputs.container-name }}:latest
+          docker build -f docker/buildpacks-deps-seaurchin.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
+          docker tag ${{ steps.vars.outputs.container-name-tag }} ${{ steps.vars.outputs.container-name }}:latest
 
       - name: Test Container
         run: |
           for image in ${{ steps.vars.outputs.container-name-tag }} ${{  steps.vars.outputs.container-name }}; do
-            podman run --rm -it $image /usr/bin/bash -x -c 'printf '\''#include <iostream>\nint main(int argc, char **argv) { std::cout << "Hello\\n"; }'\'' | clang++ -x c++ - && ./a.out | grep Hello'
+            docker run --rm -it $image /usr/bin/bash -x -c 'printf '\''#include <iostream>\nint main(int argc, char **argv) { std::cout << "Hello\\n"; }'\'' | clang++18 -x c++ - && ./a.out | grep Hello'
           done
 
       - name: Push Container
@@ -55,6 +55,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          podman login -u ${{ github.actor }} -p $GITHUB_TOKEN ghcr.io
-          podman push ${{ steps.vars.outputs.container-name-tag }}
-          podman push ${{ steps.vars.outputs.container-name }}:latest
+          docker login -u ${{ github.actor }} -p $GITHUB_TOKEN ghcr.io
+          docker push ${{ steps.vars.outputs.container-name-tag }}
+          docker push ${{ steps.vars.outputs.container-name }}:latest
