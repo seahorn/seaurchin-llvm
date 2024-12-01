@@ -5,22 +5,16 @@ permissions:
   contents: read
 
 on:
-  push:
+  workflow_dispatch:
     branches:
-      - main
-    paths:
-      - .github/workflows/build-ci-container.yml
-      - '.github/workflows/containers/github-action-ci/**'
-  pull_request:
-    branches:
-      - main
+      - dev-18
     paths:
       - .github/workflows/build-ci-container.yml
       - '.github/workflows/containers/github-action-ci/**'
 
 jobs:
   build-ci-container:
-    if: github.repository_owner == 'seaurchin-llvm'
+    #if: github.repository_owner == 'seaurchin-llvm'
     runs-on: ubuntu-latest
     permissions:
       packages: write
