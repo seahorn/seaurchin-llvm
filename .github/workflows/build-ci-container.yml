@@ -35,7 +35,7 @@ jobs:
       - name: Build Container
         working-directory: ./.github/workflows/containers/github-action-ci/
         run: |
-          docker build -f docker/buildpacks-deps-seaurchin.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
+          docker build -f docker/buildpack-deps-seaurchin.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
           docker tag ${{ steps.vars.outputs.container-name-tag }} ${{ steps.vars.outputs.container-name }}:latest
 
       - name: Test Container
