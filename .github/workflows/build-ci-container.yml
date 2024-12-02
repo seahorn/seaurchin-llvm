@@ -23,7 +23,7 @@ jobs:
         id: vars
         run: |
           tag=`date +%s`
-          container_name="ghcr.io/$GITHUB_REPOSITORY_OWNER/ci-ubuntu-22.04"
+          container_name="ghcr.io/$GITHUB_REPOSITORY_OWNER/seaurchin-llvm/ci-ubuntu-22.04"
           echo "container-name=buildpack-deps-seaurchin" >> $GITHUB_OUTPUT
           echo "container-name-tag=$container_name:latest" >> $GITHUB_OUTPUT
 
@@ -35,7 +35,7 @@ jobs:
       - name: Build Container
         working-directory: ./.github/workflows/containers/github-action-ci/
         run: |
-          docker build -f docker/buildpacks-deps-seaurchin.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
+          docker build -f docker/buildpack-deps-seaurchin.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
           docker tag ${{ steps.vars.outputs.container-name-tag }} ${{ steps.vars.outputs.container-name }}:latest
 
       - name: Test Container
