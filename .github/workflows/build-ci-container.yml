@@ -14,7 +14,7 @@ on:
 
 jobs:
   build-ci-container:
-    if: github.repository_owner == 'seaurchin-llvm'
+    if: github.repository_owner == 'seahorn'
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -33,7 +33,7 @@ jobs:
           sparse-checkout: .github/workflows/containers/github-action-ci/
 
       - name: Build Container
-        working-directory: ./.github/workflows/containers/github-action-ci/
+        working-directory: .
         run: |
           docker build -f docker/buildpack-deps-seaurchin.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
           docker tag ${{ steps.vars.outputs.container-name-tag }} ${{ steps.vars.outputs.container-name }}:latest
