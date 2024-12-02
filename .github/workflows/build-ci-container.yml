@@ -49,4 +49,3 @@ jobs:
         run: |
           docker login -u ${{ github.actor }} -p $GITHUB_TOKEN ghcr.io
           docker push ${{ steps.vars.outputs.container-name-tag }}
-          docker push ${{ steps.vars.outputs.container-name }}:latest
