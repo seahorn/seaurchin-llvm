@@ -30,7 +30,7 @@ jobs:
       - name: Checkout LLVM
         uses: actions/checkout@v4
         with:
-          sparse-checkout: set docker/ .github/workflows/containers/github-action-ci/
+          sparse-checkout: docker/
 
       - name: Build buildpack-deps-seaurchin Container
         run: |
