@@ -40,7 +40,7 @@ jobs:
       - name: Test buildpack-deps-seaurchin Container
         run: |
           for image in ${{ steps.vars.outputs.container-name-tag }} ${{  steps.vars.outputs.container-name }}; do
-            docker run --rm -t $image /usr/bin/bash -x -c 'printf '\''#include <iostream>\nint main(int argc, char **argv) { std::cout << "Hello\\n"; }'\'' | clang++18 -x c++ - && ./a.out | grep Hello'
+            docker run --rm -t $image /usr/bin/bash -x -c 'printf '\''#include <iostream>\nint main(int argc, char **argv) { std::cout << "Hello\\n"; }'\'' | clang++-18 -x c++ - && ./a.out | grep Hello'
           done
 
       - name: Push buildpack-deps-seaurchin Container
