@@ -10,7 +10,7 @@ on:
       - dev-18
     paths:
       - .github/workflows/build-ci-container.yml
-      - '.github/workflows/containers/github-action-ci/**'
+      - 'docker/**'
 
 jobs:
   build-ci-container:
