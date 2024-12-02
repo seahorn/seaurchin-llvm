@@ -5,8 +5,7 @@
 #  - BUILD_TYPE: ASSERTIONS_ON, FORCE_ENABLE_STATS
 ARG BASE_IMAGE=jammy-llvm18
 #FROM seaurchin/buildpack-deps-seaurchin:$BASE_IMAGE
-FROM buildpack-seaurchin-local:latest
-
+FROM ghcr.io/seahorn/seaurchin-llvm/buildpack-deps-seaurchin:latest
 # Assume that docker-build is ran in the top-level SeaHorn directory
 COPY . /seaurchin-llvm
 # Re-create the build directory that might have been present in the source tree
@@ -22,6 +21,7 @@ ARG BUILD_TYPE=ASSERTIONS_ON
 # Build configuration
 RUN cmake ../llvm -GNinja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -S llvm \
   -GNinja \
   -DCMAKE_CXX_COMPILER=clang++-18 \
   -DCMAKE_C_COMPILER=clang-18 \

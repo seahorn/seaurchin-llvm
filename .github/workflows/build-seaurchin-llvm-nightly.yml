@@ -1,5 +1,5 @@
 
-name: Build builddeps Container
+name: Build seaurchin-llvm Container
 
 permissions:
   contents: read
