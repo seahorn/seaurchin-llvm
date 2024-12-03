@@ -40,7 +40,7 @@ jobs:
   
       - name: Build seaurchin-llvm Container
         run: |
-          docker build -f docker/buildpack-deps-seaurchin.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
+          docker build -f docker/seaurchin-llvm-builder.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
           docker tag ${{ steps.vars.outputs.container-name-tag }} ${{ steps.vars.outputs.container-name }}:latest
 
       - name: Test seaurchin-llvm Container
