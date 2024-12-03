@@ -21,7 +21,6 @@ ARG BUILD_TYPE=ASSERTIONS_ON
 # Build configuration
 RUN cmake ../llvm -GNinja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -S llvm \
   -GNinja \
   -DCMAKE_CXX_COMPILER=clang++-18 \
   -DCMAKE_C_COMPILER=clang-18 \
