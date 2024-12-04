@@ -1,5 +1,5 @@
 
-name: Build seaurchin-llvm Container
+name: Build seaurchin-llvm binaries
 
 permissions:
   contents: read
@@ -8,50 +8,112 @@ on:
   workflow_dispatch:
     branches:
       - dev-18
-    paths:
-      - .github/workflows/build-seaurchin-llvm-nightly.yml
-      - 'docker/**'
+    inputs:
+      release-version:
+        description: 'Release Version'
+        required: true
+        type: string
+      upload:
+        description: 'Upload binaries to the release page'
+        required: true
+        default: false
+        type: boolean  
 
 jobs:
-  build-ci-container:
-    if: github.repository_owner == 'seahorn'
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
+  prepare:
+    name: Prepare to build binaries
+    runs-on: ubuntu-22.04
+    if: github.repository == 'seahorn/seaurchin-llvm'
+    outputs:
+      release-version: ${{ steps.vars.outputs.release-version }}
+      ref: ${{ steps.vars.outputs.ref }}
+      upload: ${{ steps.vars.outputs.upload }}
+
     steps:
-      - name: Write Variables
-        id: vars
-        run: |
-          tag=`date +%s`
-          container_name="ghcr.io/$GITHUB_REPOSITORY_OWNER/seaurchin-llvm/seaurchin-llvm"
-          echo "container-name=buildpack-deps-seaurchin" >> $GITHUB_OUTPUT
-          echo "container-name-tag=$container_name:latest" >> $GITHUB_OUTPUT
+    - name: Checkout LLVM
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-      - name: Checkout LLVM
-        uses: actions/checkout@v4
-      
-        # Log in to GitHub Container Registry (GHCR)
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-  
-      - name: Build seaurchin-llvm Container
-        run: |
-          docker build -f docker/seaurchin-llvm-builder.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
-          docker tag ${{ steps.vars.outputs.container-name-tag }} ${{ steps.vars.outputs.container-name }}:latest
+    - name: Install Dependencies
+      run: |
+        pip install -r ./llvm/utils/git/requirements.txt
 
-      - name: Test seaurchin-llvm Container
-        run: |
-          for image in ${{ steps.vars.outputs.container-name-tag }} ${{  steps.vars.outputs.container-name }}; do
-            docker run --rm -t $image /usr/bin/bash -x -c '/seaurchin-llvm/build-rel/bin/llvm-lit /seaurchin-llvm/llvm/test/Transforms/'
-          done
+    - name: Check Permissions
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        USER_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+      run: |
+        ./llvm/utils/release/./github-upload-release.py --token "$GITHUB_TOKEN" --user ${{ github.actor }} --user-token "$USER_TOKEN" check-permissions
 
-      - name: Push seaurchin-llvm Container
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          docker login -u ${{ github.actor }} -p $GITHUB_TOKEN ghcr.io
-          docker push ${{ steps.vars.outputs.container-name-tag }}
+    - name: Collect Variables
+      id: vars
+      # In order for the test-release.sh script to run correctly, the LLVM
+      # source needs to be at the following location relative to the build dir:
+      # | X.Y.Z-rcN | ./rcN/llvm-project
+      # | X.Y.Z     | ./final/llvm-project
+      #
+      # We also need to set divergent flags based on the release version:
+      # | X.Y.Z-rcN | -rc N -test-asserts
+      # | X.Y.Z     | -final
+      run: |
+        tag="${{ github.ref_name }}"
+        trimmed=$(echo ${{ inputs.release-version }} | xargs)
+        [[ "$trimmed" != "" ]] && tag="llvmorg-$trimmed"
+        if [ "$tag" = "main" ]; then
+          # If tag is main, then we've been triggered by a scheduled so pass so
+          # use the head commit as the tag.
+          tag=`git rev-parse HEAD`
+        fi
+        if [ -n "${{ inputs.upload }}" ]; then
+          upload="${{ inputs.upload }}"
+        else
+          upload="false"
+        fi
+        bash .github/workflows/set-release-binary-outputs.sh "$tag" "$upload"
+
+  build-seaurchin-llvm-linux:
+    name: "Build seaurchin-llvm Linux"
+    needs: prepare
+    runs-on: ubuntu-22.04
+    if: github.repository == 'seahorn/seaurchin-llvm'
+    steps:
+    - name: Checkout LLVM
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      with:
+        ref: ${{ needs.prepare.outputs.ref }}
+
+    - name: Install Ninja
+      uses: llvm/actions/install-ninja@22e9f909d35b50bd1181709564bfe816eaeaae81 # main
+
+    - name: Setup sccache
+      uses: hendrikmuhs/ccache-action@ca3acd2731eef11f1572ccb126356c2f9298d35e # v1.2.9
+      with:
+        max-size: 250M
+        key: sccache-${{ runner.os }}-release
+        variant: sccache
+
+    - name: Build seaurchin-llvm Clang
+      run: |
+        sudo chown $USER:$USER /mnt/
+        cmake -G Ninja -C clang/cmake/caches/Release.cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -S llvm -B /mnt/build
+        ninja -v -C /mnt/build
+
+    # We need to create an archive of the build directory, because it has too
+    # many files to upload.
+    - name: Package Build and Source Directories
+      run: |
+        tar -c . | zstd -T0 -c > seaurchin-llvm-project.tar.zst
+        tar -C /mnt/ -c build/ | zstd -T0 -c > seaurchin-llvm-build.tar.zst
+
+    - name: Upload seaurchin-llvm Source
+      uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 #v4.3.0
+      with:
+        name: seaurchin-llvm-source
+        path: seaurchin-llvm-project.tar.zst
+        retention-days: 2
+
+    - name: Upload seaurchin-llvm Dir
+      uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 #v4.3.0
+      with:
+        name: seaurchin-llvm-build
+        path: seaurchin-llvm-build.tar.zst
+        retention-days: 2
