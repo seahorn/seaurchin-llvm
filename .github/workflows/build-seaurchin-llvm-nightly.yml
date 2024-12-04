@@ -37,39 +37,6 @@ jobs:
       run: |
         pip install -r ./llvm/utils/git/requirements.txt
 
-    #- name: Check Permissions
-    #  env:
-    #    GITHUB_TOKEN: ${{ github.token }}
-    #    USER_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
-    #  run: |
-    #    ./llvm/utils/release/./github-upload-release.py --token "$GITHUB_TOKEN" --user ${{ github.actor }} --user-token "$USER_TOKEN" check-permissions
-
-    #- name: Collect Variables
-    #  id: vars
-      # In order for the test-release.sh script to run correctly, the LLVM
-      # source needs to be at the following location relative to the build dir:
-      # | X.Y.Z-rcN | ./rcN/llvm-project
-      # | X.Y.Z     | ./final/llvm-project
-      #
-      # We also need to set divergent flags based on the release version:
-      # | X.Y.Z-rcN | -rc N -test-asserts
-      # | X.Y.Z     | -final
-    #  run: |
-    #    tag="${{ github.ref_name }}"
-    #    trimmed=$(echo ${{ inputs.release-version }} | xargs)
-    #    [[ "$trimmed" != "" ]] && tag="llvmorg-$trimmed"
-    #    if [ "$tag" = "main" ]; then
-    #      # If tag is main, then we've been triggered by a scheduled so pass so
-    #      # use the head commit as the tag.
-    #      tag=`git rev-parse HEAD`
-    #    fi
-    #    if [ -n "${{ inputs.upload }}" ]; then
-    #      upload="${{ inputs.upload }}"
-    #    else
-    #      upload="false"
-    #    fi
-    #    bash .github/workflows/set-release-binary-outputs.sh "$tag" "$upload"
-
   build-seaurchin-llvm-linux:
     name: "Build seaurchin-llvm Linux"
     needs: prepare
