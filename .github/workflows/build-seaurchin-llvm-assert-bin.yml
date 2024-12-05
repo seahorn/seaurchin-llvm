@@ -1,0 +1,86 @@
+
+name: Build seaurchin-llvm binaries w assert
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    branches:
+      - dev-18
+    inputs:
+      release-version:
+        description: 'Release Version'
+        required: true
+        type: string
+      upload:
+        description: 'Upload binaries to the release page'
+        required: true
+        default: false
+        type: boolean  
+
+jobs:
+  prepare:
+    name: Prepare to build binaries
+    runs-on: ubuntu-22.04
+    if: github.repository == 'seahorn/seaurchin-llvm'
+    outputs:
+      release-version: ${{ steps.vars.outputs.release-version }}
+      ref: ${{ steps.vars.outputs.ref }}
+      upload: ${{ steps.vars.outputs.upload }}
+
+    steps:
+    - name: Checkout LLVM
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Install Dependencies
+      run: |
+        pip install -r ./llvm/utils/git/requirements.txt
+
+  build-seaurchin-llvm-linux:
+    name: "Build seaurchin-llvm Linux"
+    needs: prepare
+    runs-on: ubuntu-22.04
+    if: github.repository == 'seahorn/seaurchin-llvm'
+    steps:
+    - name: Checkout LLVM
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      with:
+        ref: ${{ needs.prepare.outputs.ref }}
+
+    - name: Install Ninja
+      uses: llvm/actions/install-ninja@22e9f909d35b50bd1181709564bfe816eaeaae81 # main
+
+    - name: Setup sccache
+      uses: hendrikmuhs/ccache-action@ca3acd2731eef11f1572ccb126356c2f9298d35e # v1.2.9
+      with:
+        max-size: 250M
+        key: sccache-${{ runner.os }}-release
+        variant: sccache
+
+    - name: Build seaurchin-llvm Clang
+      run: |
+        sudo chown $USER:$USER /mnt/
+        cmake -G Ninja -C clang/cmake/caches/Release.cmake -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -S llvm -B /mnt/build
+        ninja -v -C /mnt/build check-llvm
+
+    # We need to create an archive of the build directory, because it has too
+    # many files to upload.
+    - name: Package Build and Source Directories
+      run: |
+        tar -c . | zstd -T0 -c > seaurchin-llvm-project.tar.zst
+        tar -C /mnt/ -c build/ | zstd -T0 -c > seaurchin-llvm-assert-build.tar.zst
+
+    - name: Upload seaurchin-llvm Source
+      uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 #v4.3.0
+      with:
+        name: seaurchin-llvm-source
+        path: seaurchin-llvm-project.tar.zst
+        retention-days: 2
+
+    - name: Upload seaurchin-llvm Dir
+      uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 #v4.3.0
+      with:
+        name: seaurchin-llvm-assert-build
+        path: seaurchin-llvm-assert-build.tar.zst
+        retention-days: 2
