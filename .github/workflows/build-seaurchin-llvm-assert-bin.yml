@@ -52,7 +52,7 @@ jobs:
       uses: llvm/actions/install-ninja@22e9f909d35b50bd1181709564bfe816eaeaae81 # main
 
     - name: Setup sccache
-      uses: hendrikmuhs/ccache-action@ca3acd2731eef11f1572ccb126356c2f9298d35e # v1.2.9
+      uses: hendrikmuhs/ccache-action@v1.2
       with:
         max-size: 250M
         key: sccache-${{ runner.os }}-release
