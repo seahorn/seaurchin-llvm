@@ -62,7 +62,7 @@ jobs:
       run: |
         mkdir mnt
         chown $USER:$USER mnt/
-        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER_LAUNCHER=clang-14 -DCMAKE_CXX_COMPILER_LAUNCHER=clang++-14 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=mnt/install llvm -B mnt/build
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER_LAUNCHER=clang-18 -DCMAKE_CXX_COMPILER_LAUNCHER=clang++-18 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=mnt/install llvm -B mnt/build
         ninja -v -C mnt/build 
         ninja -v -C mnt/build check-llvm
         ninja -v -C mnt/build install 
