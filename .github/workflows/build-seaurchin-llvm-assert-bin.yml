@@ -60,18 +60,19 @@ jobs:
 
     - name: Build/test seaurchin-llvm
       run: |
-        sudo chown $USER:$USER /mnt/
-        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER_LAUNCHER=clang-14 -DCMAKE_CXX_COMPILER_LAUNCHER=clang++-14 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=/mnt/install llvm -B /mnt/build
-        ninja -v -C /mnt/build 
-        ninja -v -C /mnt/build check-llvm
-        ninja -v -C /mnt/build install 
+        mkdir mnt
+        chown $USER:$USER mnt/
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER_LAUNCHER=clang-14 -DCMAKE_CXX_COMPILER_LAUNCHER=clang++-14 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=mnt/install llvm -B mnt/build
+        ninja -v -C mnt/build 
+        ninja -v -C mnt/build check-llvm
+        ninja -v -C mnt/build install 
 
     # We need to create an archive of the build directory, because it has too
     # many files to upload.
     - name: Package Build and Source Directories
       run: |
         tar -c . | zstd -T0 -c > seaurchin-llvm-project.tar.zst
-        tar -C /mnt/ -c install/ | zstd -T0 -c > seaurchin-llvm-assert-install.tar.zst
+        tar -C mnt/ -c install/ | zstd -T0 -c > seaurchin-llvm-assert-install.tar.zst
 
     - name: Upload seaurchin-llvm Source
       uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 #v4.3.0
