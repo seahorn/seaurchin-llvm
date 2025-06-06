@@ -22,7 +22,7 @@ on:
 jobs:
   prepare:
     name: Prepare to build binaries
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
     if: github.repository == 'seahorn/seaurchin-llvm'
     outputs:
       release-version: ${{ steps.vars.outputs.release-version }}
@@ -40,7 +40,7 @@ jobs:
   build-seaurchin-llvm-linux:
     name: "Build seaurchin-llvm Linux"
     needs: prepare
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
     if: github.repository == 'seahorn/seaurchin-llvm'
     steps:
     - name: Checkout LLVM
