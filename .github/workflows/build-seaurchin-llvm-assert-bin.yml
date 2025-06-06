@@ -48,20 +48,20 @@ jobs:
       with:
         ref: ${{ needs.prepare.outputs.ref }}
 
-    - name: Install Ninja
-      uses: llvm/actions/install-ninja@22e9f909d35b50bd1181709564bfe816eaeaae81 # main
+    # - name: Install Ninja
+    #   uses: llvm/actions/install-ninja@22e9f909d35b50bd1181709564bfe816eaeaae81 # main
 
-    - name: Setup sccache
-      uses: hendrikmuhs/ccache-action@v1.2
-      with:
-        max-size: 250M
-        key: sccache-${{ runner.os }}-release
-        variant: sccache
+    # - name: Setup sccache
+    #   uses: hendrikmuhs/ccache-action@v1.2
+    #   with:
+    #     max-size: 250M
+    #     key: sccache-${{ runner.os }}-release
+    #     variant: sccache
 
     - name: Build/test seaurchin-llvm
       run: |
         sudo chown $USER:$USER /mnt/
-        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=/mnt/install llvm -B /mnt/build
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER_LAUNCHER=clang-14 -DCMAKE_CXX_COMPILER_LAUNCHER=clang++-14 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=/mnt/install llvm -B /mnt/build
         ninja -v -C /mnt/build 
         ninja -v -C /mnt/build check-llvm
         ninja -v -C /mnt/build install 
