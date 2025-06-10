@@ -19,33 +19,35 @@ workflow:
     # otherwise, don’t create a pipeline
     - when: never
 
-prepare:
-  stage: prepare
-  image: git.uwaterloo.ca:5050/seaurchin/seaurchin-llvm
-  script:
-    - apt-get update && apt-get install -y git
-    - git clone https://git.uwaterloo.ca/seaurchin/seaurchin-llvm.git
-    - cd seaurchin-llvm
-    - pip install -r ./llvm/utils/git/requirements.txt
-  artifacts:
-    paths:
-      - seaurchin-llvm
-    expire_in: 2 hours
+# prepare:
+#   stage: prepare
+#   image: git.uwaterloo.ca:5050/seaurchin/seaurchin-llvm
+#   script:
+#     - apt-get update && apt-get install -y git
+#     - git fetch origin
+#     - git checkout dev-18   
+   
+#     - pip install -r ./llvm/utils/git/requirements.txt
+
+#   artifacts:
+#     paths:
+#       - seaurchin-llvm
+#     expire_in: 2 hours
 
 build-seaurchin-llvm-linux:
   stage: build
   image: git.uwaterloo.ca:5050/seaurchin/seaurchin-llvm
-  needs: [prepare]
+  #needs: [prepare]
   script:
-    - cd seaurchin-llvm
-    - mkdir -p mnt && chown -R $(id -u):$(id -g) mnt
+    - git checkout dev-18
+    - mkdir -p /mnt && chown -R $(id -u):$(id -g) /mnt
     - cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR llvm -B $BUILD_DIR
     - ninja -v -C $BUILD_DIR
     - ninja -v -C $BUILD_DIR check-llvm
     - ninja -v -C $BUILD_DIR install
     - tar -c . | zstd -T0 -c > $SOURCE_ARCHIVE
-    - tar -C mnt/ -c install/ | zstd -T0 -c > $INSTALL_ARCHIVE
+    - tar -C /mnt/ -c install/ | zstd -T0 -c > $INSTALL_ARCHIVE
   artifacts:
     paths:
-      - seaurchin-llvm/$INSTALL_ARCHIVE
+      - $INSTALL_ARCHIVE
     expire_in: 30 days
