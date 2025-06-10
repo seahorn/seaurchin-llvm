@@ -24,7 +24,7 @@ prepare:
   image: git.uwaterloo.ca:5050/seaurchin/seaurchin-llvm
   script:
     - apt-get update && apt-get install -y git
-    - git clone https://gitlab.com/your-org/seaurchin-llvm.git
+    - git clone https://git.uwaterloo.ca/seaurchin/seaurchin-llvm.git
     - cd seaurchin-llvm
     - pip install -r ./llvm/utils/git/requirements.txt
   artifacts:
