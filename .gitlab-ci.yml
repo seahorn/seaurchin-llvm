@@ -5,8 +5,7 @@ stages:
 variables:
   BUILD_DIR: "/mnt/build"
   INSTALL_DIR: "/mnt/install"
-  SOURCE_ARCHIVE: "seaurchin-llvm-project.tar.zst"
-  INSTALL_ARCHIVE: "seaurchin-llvm-assert-install.tar.zst"
+  INSTALL_ARCHIVE: "seaurchin-llvm-assert-install-dev18.tar.zst"
 
 workflow:
   rules:
