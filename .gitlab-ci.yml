@@ -21,20 +21,7 @@ workflow:
 
 prepare:
   stage: prepare
-  image: ubuntu:22.04
-  before_script:
-  - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
-      ninja-build
-      zstd
-      cmake
-      git
-      python3
-      python3-pip
-    - apt-get install -y wget gnupg software-properties-common lsb-release
-    - wget https://apt.llvm.org/llvm-snapshot.gpg.key -O - | apt-key add -
-    - echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" > /etc/apt/sources.list.d/llvm18.list
-    - apt-get update
-    - apt-get install -y clang-18 clang++-18
+  image: git.uwaterloo.ca:5050/seaurchin/seaurchin-llvm
   script:
     - apt-get update && apt-get install -y git
     - git clone https://gitlab.com/your-org/seaurchin-llvm.git
@@ -47,7 +34,7 @@ prepare:
 
 build-seaurchin-llvm-linux:
   stage: build
-  image: ubuntu:22.04
+  image: git.uwaterloo.ca:5050/seaurchin/seaurchin-llvm
   needs: [prepare]
   script:
     - cd seaurchin-llvm
