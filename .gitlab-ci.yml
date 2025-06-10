@@ -1,0 +1,61 @@
+stages:
+  - prepare
+  - build
+
+variables:
+  BUILD_DIR: "/mnt/build"
+  INSTALL_DIR: "/mnt/install"
+  SOURCE_ARCHIVE: "seaurchin-llvm-project.tar.zst"
+  INSTALL_ARCHIVE: "seaurchin-llvm-assert-install.tar.zst"
+
+workflow:
+  rules:
+    # always allow the “Run pipeline” button
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: always
+    # still run on pushes to dev-18
+    - if: $CI_COMMIT_BRANCH == "dev-18" && $CI_PIPELINE_SOURCE == "push"
+      when: always
+    # otherwise, don’t create a pipeline
+    - when: never
+
+prepare:
+  stage: prepare
+  image: ubuntu:22.04
+  before_script:
+  - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
+      clang-18
+      clang++-18
+      ninja-build
+      zstd
+      cmake
+      git
+      python3
+      python3-pip
+  script:
+    - apt-get update && apt-get install -y git
+    - git clone https://gitlab.com/your-org/seaurchin-llvm.git
+    - cd seaurchin-llvm
+    - pip install -r ./llvm/utils/git/requirements.txt
+  artifacts:
+    paths:
+      - seaurchin-llvm
+    expire_in: 2 hours
+
+build-seaurchin-llvm-linux:
+  stage: build
+  image: ubuntu:22.04
+  needs: [prepare]
+  script:
+    - cd seaurchin-llvm
+    - mkdir -p mnt && chown -R $(id -u):$(id -g) mnt
+    - cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR llvm -B $BUILD_DIR
+    - ninja -v -C $BUILD_DIR
+    - ninja -v -C $BUILD_DIR check-llvm
+    - ninja -v -C $BUILD_DIR install
+    - tar -c . | zstd -T0 -c > $SOURCE_ARCHIVE
+    - tar -C mnt/ -c install/ | zstd -T0 -c > $INSTALL_ARCHIVE
+  artifacts:
+    paths:
+      - seaurchin-llvm/$INSTALL_ARCHIVE
+    expire_in: 30 days
