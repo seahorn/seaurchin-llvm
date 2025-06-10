@@ -44,7 +44,6 @@ build-seaurchin-llvm-linux:
     - ninja -v -C $BUILD_DIR
     - ninja -v -C $BUILD_DIR check-llvm
     - ninja -v -C $BUILD_DIR install
-    - tar -c . | zstd -T0 -c > $SOURCE_ARCHIVE
     - tar -C /mnt/ -c install/ | zstd -T0 -c > $INSTALL_ARCHIVE
   artifacts:
     paths:
