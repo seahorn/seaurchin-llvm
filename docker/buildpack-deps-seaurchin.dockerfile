@@ -23,7 +23,7 @@ RUN apt-get update && \
       gcc-multilib \
       sudo \
       graphviz libgraphviz-dev python3-pygraphviz \
-      lcov gcovr rsync lld && \
+      lcov gcovr rsync lld zstd && \
   pip3 install lit OutputCheck && \
   pip3 install networkx && \
   pip3 install cmake --upgrade && \
