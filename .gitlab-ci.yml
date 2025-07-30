@@ -27,7 +27,7 @@ sync-from-github:
   script:
   - |
     export GITHUB_REPO="https://github.com/seahorn/seaurchin-llvm.git"
-    export GITLAB_REPO="https://gitlab-ci-token:${CI_JOB_TOKEN}@git.uwaterloo.ca/seaurchin/seaurchin-llvm.git"
+    export GITLAB_REPO="https://${CI_PUSH_USER}:${CI_PUSH_TOKEN}@git.uwaterloo.ca/seaurchin/seaurchin-llvm.git"
     export SYNC_BRANCH="dev-18"
     git clone --single-branch --branch "$SYNC_BRANCH" "$GITHUB_REPO" github
     cd github
