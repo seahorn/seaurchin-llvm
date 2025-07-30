@@ -22,7 +22,7 @@ sync-from-github:
   image: ubuntu:22.04
   before_script:
     - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git bash
-    - git config --global user.name "GHub to GLab Sync Bot"
+    - git config --global user.name "GHub-to-GLab Sync-Bot"
     - git config --global user.email "bot@example.com"
   script:
   - |
@@ -33,6 +33,9 @@ sync-from-github:
     cd github
     git remote add gitlab "$GITLAB_REPO"
     echo "Attempting fast-forward-only push from GitHub → GitLab..."
+    git remote -v
+    echo "CI_JOB_TOKEN is present? ${CI_JOB_TOKEN:+yes}"
+    git ls-remote "$GITLAB_REPO"
     # Check if local is strictly ahead of remote
     if git merge-base --is-ancestor "gitlab/$SYNC_BRANCH" "$SYNC_BRANCH"; then
       echo "✅ Fast-forward possible, pushing..."
