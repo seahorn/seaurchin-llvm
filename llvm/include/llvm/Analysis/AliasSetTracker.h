@@ -23,6 +23,7 @@
 #include "llvm/ADT/ilist.h"
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/Analysis/MemoryLocation.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/ValueHandle.h"
@@ -141,7 +142,7 @@ public:
   /// Returns true if CallBase moves or borrows memory.
   /// Returns false if CallBase does not move or borrow memory.
   /// Returns nullopt if it cannot determine.
-  std::optional<bool> cbMoveOrBorrowMem(Value *V) const;
+  std::optional<bool> cbMoveOrBorrowMem(Value *V, DominatorTree *DT) const;
 
 private:
   // Can only be created by AliasSetTracker.

@@ -49,17 +49,20 @@ struct LICMOptions {
   unsigned MssaOptCap;
   unsigned MssaNoAccForPromotionCap;
   bool AllowSpeculation;
+  bool IsVectorizationDone;
 
   LICMOptions()
       : MssaOptCap(SetLicmMssaOptCap),
         MssaNoAccForPromotionCap(SetLicmMssaNoAccForPromotionCap),
-        AllowSpeculation(true) {}
+        AllowSpeculation(true),
+        IsVectorizationDone(false) {}
 
   LICMOptions(unsigned MssaOptCap, unsigned MssaNoAccForPromotionCap,
-              bool AllowSpeculation)
+              bool AllowSpeculation, bool IsVectorizationDone)
       : MssaOptCap(MssaOptCap),
         MssaNoAccForPromotionCap(MssaNoAccForPromotionCap),
-        AllowSpeculation(AllowSpeculation) {}
+        AllowSpeculation(AllowSpeculation),
+        IsVectorizationDone(IsVectorizationDone) {}
 };
 
 /// Performs Loop Invariant Code Motion Pass.
@@ -68,9 +71,9 @@ class LICMPass : public PassInfoMixin<LICMPass> {
 
 public:
   LICMPass(unsigned MssaOptCap, unsigned MssaNoAccForPromotionCap,
-           bool AllowSpeculation)
+           bool AllowSpeculation, bool IsVectorizationDone)
       : LICMPass(LICMOptions(MssaOptCap, MssaNoAccForPromotionCap,
-                             AllowSpeculation)) {}
+                             AllowSpeculation, IsVectorizationDone)) {}
   LICMPass(LICMOptions Opts) : Opts(Opts) {}
 
   PreservedAnalyses run(Loop &L, LoopAnalysisManager &AM,
@@ -88,7 +91,7 @@ public:
   LNICMPass(unsigned MssaOptCap, unsigned MssaNoAccForPromotionCap,
             bool AllowSpeculation)
       : LNICMPass(LICMOptions(MssaOptCap, MssaNoAccForPromotionCap,
-                              AllowSpeculation)) {}
+                              AllowSpeculation, /* IsVectorizationDone */ false)) {}
   LNICMPass(LICMOptions Opts) : Opts(Opts) {}
 
   PreservedAnalyses run(LoopNest &L, LoopAnalysisManager &AM,

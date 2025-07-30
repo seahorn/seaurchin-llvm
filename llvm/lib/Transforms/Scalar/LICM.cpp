@@ -60,6 +60,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -174,11 +175,35 @@ static cl::opt<bool> LicmUsesOwnSem(
     cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used for"
               " increasing number of promotable MustAlias sets."));
 
+static cl::opt<bool> LicmOwnSemAS(
+    "licm-ownsem-as", cl::init(false), cl::Hidden,
+    cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used for"
+              " creating AliasSets"));
+
 static cl::opt<bool> LicmOwnSemSafeSetIgnoresThrow(
     "licm-ownsem-safeset-ignores-throw", cl::init(false), cl::Hidden,
-    cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used for"
-              " increasing number of promotable MustAlias sets."));
-        
+    cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used for "
+              " assuming that throws from a function do not return "
+              " immutably or mutably borrowed pointers"));
+
+static cl::opt<bool> LicmOwnSemSafeStoreThreadSafe(
+    "licm-ownsem-safeset-store-threadsafe", cl::init(false), cl::Hidden,
+    cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used for "
+              " assuming that throws from a function do not return "
+              " immutably or mutably borrowed pointers"));
+static cl::opt<bool> LicmOwnSemOnlyAfterVectorization(
+    "licm-ownsem-only-after-vectorization", cl::init(false), cl::Hidden,
+    cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used only "
+              " after vectorization has run so that vectorization is not "
+              " thwarted by the extra promotions."));
+static cl::opt<bool> LicmNoPromoteLoadOnly(
+    "licm-no-promote-load-only", cl::init(false), cl::Hidden,
+    cl::desc("[LICM & Ownsem] Do not promote only loads."));
+static bool isOwnsemEnabled(bool IsVectorizationDone) {
+  return LicmUsesOwnSem && (!LicmOwnSemOnlyAfterVectorization ||
+                            (LicmOwnSemOnlyAfterVectorization &&
+                             IsVectorizationDone));
+}
 static bool inSubLoop(BasicBlock *BB, Loop *CurLoop, LoopInfo *LI);
 static bool isNotUsedOrFoldableInLoop(const Instruction &I, const Loop *CurLoop,
                                       const LoopSafetyInfo *SafetyInfo,
@@ -223,7 +248,8 @@ static void foreachMemoryAccess(MemorySSA *MSSA, Loop *L,
 using PointersAndHasReadsOutsideSet =
     std::tuple<SmallSetVector<Value *, 8>, bool, bool /* safeset */>;
 static SmallVector<PointersAndHasReadsOutsideSet, 0>
-collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L);
+collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L, DominatorTree *DT,
+                          OptimizationRemarkEmitter *ORE, bool IsVectorizationDone);
 
 namespace {
 struct LoopInvariantCodeMotion {
@@ -234,15 +260,18 @@ struct LoopInvariantCodeMotion {
 
   LoopInvariantCodeMotion(unsigned LicmMssaOptCap,
                           unsigned LicmMssaNoAccForPromotionCap,
-                          bool LicmAllowSpeculation)
+                          bool LicmAllowSpeculation,
+                          bool IsVectorizationDone)
       : LicmMssaOptCap(LicmMssaOptCap),
         LicmMssaNoAccForPromotionCap(LicmMssaNoAccForPromotionCap),
-        LicmAllowSpeculation(LicmAllowSpeculation) {}
+        LicmAllowSpeculation(LicmAllowSpeculation),
+        LicmIsVectorizationDone(IsVectorizationDone) {}
 
 private:
   unsigned LicmMssaOptCap;
   unsigned LicmMssaNoAccForPromotionCap;
   bool LicmAllowSpeculation;
+  bool LicmIsVectorizationDone;
 };
 
 struct LegacyLICMPass : public LoopPass {
@@ -250,9 +279,10 @@ struct LegacyLICMPass : public LoopPass {
   LegacyLICMPass(
       unsigned LicmMssaOptCap = SetLicmMssaOptCap,
       unsigned LicmMssaNoAccForPromotionCap = SetLicmMssaNoAccForPromotionCap,
-      bool LicmAllowSpeculation = true)
+      bool LicmAllowSpeculation = true,
+      bool IsVectorizationDone = false)
       : LoopPass(ID), LICM(LicmMssaOptCap, LicmMssaNoAccForPromotionCap,
-                           LicmAllowSpeculation) {
+                           LicmAllowSpeculation, IsVectorizationDone) {
     initializeLegacyLICMPassPass(*PassRegistry::getPassRegistry());
   }
 
@@ -315,7 +345,7 @@ PreservedAnalyses LICMPass::run(Loop &L, LoopAnalysisManager &AM,
   OptimizationRemarkEmitter ORE(L.getHeader()->getParent());
 
   LoopInvariantCodeMotion LICM(Opts.MssaOptCap, Opts.MssaNoAccForPromotionCap,
-                               Opts.AllowSpeculation);
+                               Opts.AllowSpeculation, Opts.IsVectorizationDone);
   if (!LICM.runOnLoop(&L, &AR.AA, &AR.LI, &AR.DT, &AR.AC, &AR.TLI, &AR.TTI,
                       &AR.SE, AR.MSSA, &ORE))
     return PreservedAnalyses::all();
@@ -332,7 +362,10 @@ void LICMPass::printPipeline(
       OS, MapClassName2PassName);
 
   OS << '<';
-  OS << (Opts.AllowSpeculation ? "" : "no-") << "allowspeculation";
+  OS << (Opts.IsVectorizationDone
+     ? "vectorization-done"
+     : "vectorization-not-done");
+  OS << (Opts.AllowSpeculation ? "" : ",no-") << "allowspeculation";
   OS << '>';
 }
 
@@ -349,7 +382,7 @@ PreservedAnalyses LNICMPass::run(LoopNest &LN, LoopAnalysisManager &AM,
   OptimizationRemarkEmitter ORE(LN.getParent());
 
   LoopInvariantCodeMotion LICM(Opts.MssaOptCap, Opts.MssaNoAccForPromotionCap,
-                               Opts.AllowSpeculation);
+                               Opts.AllowSpeculation, Opts.IsVectorizationDone);
 
   Loop &OutermostLoop = LN.getOutermostLoop();
   bool Changed = LICM.runOnLoop(&OutermostLoop, &AR.AA, &AR.LI, &AR.DT, &AR.AC,
@@ -520,11 +553,11 @@ bool LoopInvariantCodeMotion::runOnLoop(Loop *L, AAResults *AA, LoopInfo *LI,
       do {
         LocalPromoted = false;
         for (auto [PointerMustAliases, HasReadsOutsideSet, IsSafeSet] :
-             collectPromotionCandidates(MSSA, AA, L)) {
+             collectPromotionCandidates(MSSA, AA, L, DT, ORE, LicmIsVectorizationDone)) {
           LocalPromoted |= promoteLoopAccessesToScalars(
               PointerMustAliases, ExitBlocks, InsertPts, MSSAInsertPts, PIC, LI,
               DT, AC, TLI, TTI, L, MSSAU, &SafetyInfo, ORE,
-              LicmAllowSpeculation, HasReadsOutsideSet, IsSafeSet);
+              LicmAllowSpeculation, HasReadsOutsideSet, IsSafeSet, LicmIsVectorizationDone);
         }
         Promoted |= LocalPromoted;
       } while (LocalPromoted);
@@ -1519,7 +1552,7 @@ static void moveInstructionBefore(Instruction &I, BasicBlock::iterator Dest,
                                   ScalarEvolution *SE) {
   SafetyInfo.removeInstruction(&I);
   SafetyInfo.insertInstructionTo(&I, Dest->getParent());
-  I.moveBefore(*Dest->getParent(), Dest);         
+  I.moveBefore(*Dest->getParent(), Dest);
   if (MemoryUseOrDef *OldMemAcc = cast_or_null<MemoryUseOrDef>(
           MSSAU.getMemorySSA()->getMemoryAccess(&I)))
     MSSAU.moveToPlace(OldMemAcc, Dest->getParent(),
@@ -1753,7 +1786,7 @@ static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
                                                          << ore::NV("Inst", &I);
   });
   llvm::StringRef OwnsemKind = "ownsem";
-  auto* OwnsemMetadata = I.getMetadata(OwnsemKind);  
+  auto* OwnsemMetadata = I.getMetadata(OwnsemKind);
 
   // Metadata can be dependent on conditions we are hoisting above.
   // Conservatively strip all metadata on the instruction unless we were
@@ -1780,8 +1813,8 @@ static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
   // ownsem: we assumethat hoisting does not invalidate
   // ownership data
   if (OwnsemMetadata) {
-    I.setMetadata(OwnsemKind, OwnsemMetadata);  
-  }       
+    I.setMetadata(OwnsemKind, OwnsemMetadata);
+  }
   I.updateLocationAfterHoist();
 
   if (isa<LoadInst>(I))
@@ -1985,7 +2018,7 @@ bool llvm::promoteLoopAccessesToScalars(
     const TargetLibraryInfo *TLI, TargetTransformInfo *TTI, Loop *CurLoop,
     MemorySSAUpdater &MSSAU, ICFLoopSafetyInfo *SafetyInfo,
     OptimizationRemarkEmitter *ORE, bool AllowSpeculation,
-    bool HasReadsOutsideSet, bool IsSafeSet) {
+    bool HasReadsOutsideSet, bool IsSafeSet, bool IsVectorizationDone) {
   // Verify inputs.
   assert(LI != nullptr && DT != nullptr && CurLoop != nullptr &&
          SafetyInfo != nullptr &&
@@ -2072,9 +2105,17 @@ bool llvm::promoteLoopAccessesToScalars(
     // this by proving that the caller can't have a reference to the object
     // after return and thus can't possibly load from the object.
     Value *Object = getUnderlyingObject(SomePtr);
-    // if set is safe then don't upgrade StoreSafety
-    if (LicmUsesOwnSem && LicmOwnSemSafeSetIgnoresThrow && IsSafeSet) {
+    // OWNSEM: if set is safe then don't upgrade StoreSafety since owned, borrowed
+    // pointers are assumed dead on unwind.
+    if (isOwnsemEnabled(IsVectorizationDone) &&
+      LicmOwnSemSafeSetIgnoresThrow &&
+      IsSafeSet) {
       // do nothing
+      // NOTE: IsNotVisibleOnUnwindInLoop also checks that object is not
+      // captured before or in the loop. We do not need to check this here
+      // because even if the object is captured before or in the loop, it is not
+      // visible on unwind in the loop as per ownsem semantics, so we can still
+      // sink the store.
     } else if (!isNotVisibleOnUnwindInLoop(Object, CurLoop, DT))
       StoreSafety = StoreUnsafe;
   }
@@ -2091,7 +2132,7 @@ bool llvm::promoteLoopAccessesToScalars(
         continue;
 
       // If there is an non-load/store instruction in the loop, we can't promote
-      // it.  
+      // it.
       if (LoadInst *Load = dyn_cast<LoadInst>(UI)) {
         if (!Load->isUnordered())
           return false;
@@ -2148,6 +2189,14 @@ bool llvm::promoteLoopAccessesToScalars(
         // start sinking stores into unwind edges (see above), this will break.
         if (StoreSafety == StoreSafetyUnknown &&
             llvm::all_of(ExitBlocks, [&](BasicBlock *Exit) {
+              // A safeset guarantees that there are no observers of the store outside
+              // the aliasset within the loop, so count landingpads as don't care.
+              if (isOwnsemEnabled(IsVectorizationDone) &&
+                  LicmOwnSemSafeSetIgnoresThrow &&
+                  IsSafeSet &&
+                  isa<LandingPadInst>(Exit->getFirstNonPHIOrDbgOrLifetime())) {
+                return true;
+              }
               return DT->dominates(Store->getParent(), Exit);
             }))
           StoreSafety = StoreSafe;
@@ -2158,6 +2207,26 @@ bool llvm::promoteLoopAccessesToScalars(
           DereferenceableInPH = isDereferenceableAndAlignedPointer(
               Store->getPointerOperand(), Store->getValueOperand()->getType(),
               Store->getAlign(), MDL, Preheader->getTerminator(), AC, DT, TLI);
+        }
+        // ASSUME(Ownsem):
+        // 1. A safeset has owned or mutably borrowed pointers
+        // 2. These pointers are not visibule by any other thread since they have not been already moved before the loop
+        // 2.1.  - either using 'Send' trait (if they had been then they would not have been usable in the loop) OR
+        // 2.2   - transmuting to a number and sending it across and transmuting again to a mutref/owned pointer
+        // 3. The ptrs are not moved to another thread within the loop since collectPromotionCandidates would filter that out.
+        // 4. The ptrs are moved to another thread after the loop and before the store instruction is inserted.
+        if(isOwnsemEnabled(IsVectorizationDone) &&
+          LicmOwnSemSafeStoreThreadSafe &&
+          IsSafeSet &&
+          StoreSafety == StoreSafetyUnknown) {
+          StoreSafety = StoreSafe;
+          if (ORE) {
+            ORE->emit([&]() {
+              return OptimizationRemark(
+                        DEBUG_TYPE, "SafeSetStoreAlwaysPromote", UI)
+                  << "Safeset store is always safe to promote";
+            });
+          }
         }
       } else
         continue; // Not a load or store.
@@ -2186,14 +2255,14 @@ bool llvm::promoteLoopAccessesToScalars(
   if (SawUnorderedAtomic && SawNotAtomic) {
     NumLoadAtomic++;
     return false;
-  } 
+  }
   // If we're inserting an atomic load in the preheader, we must be able to
   // lower it.  We're only guaranteed to be able to lower naturally aligned
   // atomics.
   if (SawUnorderedAtomic && Alignment < MDL.getTypeStoreSize(AccessTy)) {
     NumLoadAtomic++;
     return false;
-  } 
+  }
   // If we couldn't prove we can hoist the load, bail.
   if (!DereferenceableInPH) {
     LLVM_DEBUG(dbgs() << "Not promoting: Not dereferenceable in preheader\n");
@@ -2220,7 +2289,7 @@ bool llvm::promoteLoopAccessesToScalars(
   if (StoreSafety != StoreSafe && !FoundLoadToPromote) {
     // If we cannot hoist the load either, give up.
     NumLoadNotPromoted++;
-    return false;       
+    return false;
   }
 
   // Lets do the promotion!
@@ -2304,7 +2373,8 @@ static void foreachMemoryAccess(MemorySSA *MSSA, Loop *L,
 // The bool indicates whether there might be reads outside the set, in which
 // case only loads may be promoted.
 static SmallVector<PointersAndHasReadsOutsideSet, 0>
-collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
+collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L, DominatorTree *DT,
+    OptimizationRemarkEmitter *ORE, bool IsVectorizationDone) {
   BatchAAResults BatchAA(*AA);
   AliasSetTracker AST(BatchAA);
 
@@ -2330,7 +2400,6 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
   for (AliasSet &AS : AST)
     if (!AS.isForwardingAliasSet() && AS.isMod() && AS.isMustAlias())
       Sets.push_back({{&AS, false}, false /* safe set*/});
-
   if (Sets.empty())
     return {}; // Nothing to promote...
 
@@ -2345,63 +2414,12 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
           // Ignore instructions that are outside the loop.
           Instruction *UI = dyn_cast<Instruction>(U.getUser());
           if (!UI || !L->contains(UI))
-            continue; 
-          LLVM_DEBUG(dbgs() << "Pointer " << *ASIV << " used by " << *UI <<" \n";); 
+            continue;
+          LLVM_DEBUG(dbgs() << "Pointer " << *ASIV << " used by " << *UI <<" \n";);
         }
-      }      
-    }; 
-
-    auto MayAliasOutSideSetOwnsem = [&](PointerIntPair<PointerIntPair<const AliasSet *, 1, bool>, 1, bool /* safeset*/> &Pairpair) {
-      auto Pair = Pairpair.getPointer();
-      auto UnsafePair = Pair.getPointer()->hasUnsafeOwnsemAccesses();
-      Pairpair.setInt(!UnsafePair.first); /* set set safety info */
-      ModRefInfo MR = Pair.getPointer()->aliasesUnknownInst(I, BatchAA);
-      std::optional<bool> TransferToArg = Pair.getPointer()->cbMoveOrBorrowMem(I);
-      LLVM_DEBUG(dbgs() << "Collect promotables, set Unsafety is: " << UnsafePair.first 
-          << " found ownsem: " << UnsafePair.second << "\n";);
-      // Pair.getPointer()->print(OS);
-      LLVM_DEBUG(dbgs() << "Aliases unknown instr: " << *I << " mod: " 
-        << isModSet(MR) << " ref:" << isRefSet(MR) << "\n";);
-      
-      if (isModSet(MR) && !UnsafePair.first && TransferToArg && TransferToArg.value() == false) {
-        LLVM_DEBUG(dbgs() << "Collect promotables will NOT erase AliasSet " 
-              << (const void*)Pair.getPointer() << "and " << *I << "\n";);
-        PrintUses(Pair.getPointer()->getPointers());
-        return false;
-      } 
-      if (isModSet(MR)) {
-      // Cannot promote if there are writes outside the set.
-        LLVM_DEBUG(dbgs() << "Collect promotables will erase AliasSet " 
-              << (const void*)Pair.getPointer() << "\n";);
-        return true;
-      } 
-      if (isRefSet(MR)) {
-        // Remember reads outside the set.
-
-        LLVM_DEBUG(dbgs() << "Collect promotables will erase (" 
-            << !Pair.getPointer()->isRef() << ") AliasSet " 
-            << (const void*)Pair.getPointer() << "\n";);
-        
-        if (!UnsafePair.first && TransferToArg && TransferToArg.value() == false) {
-          Pairpair.setPointer({Pair.getPointer(), false /* reads outside set*/});
-        } else {
-          Pairpair.setPointer({Pair.getPointer(), true /* reads outside set*/});
-        }
-        if (!UnsafePair.first) {
-          LLVM_DEBUG(dbgs() << "This safe AliasSet can be salvaged!\n";);
-          // PrintUses(Pair.getPointer()->getPointers());      
-          return false;
-        }
-        return !Pair.getPointer()->isRef();
       }
-      // If this is a mod-only set and there are reads outside the set,
-      // we will not be able to promote, so bail out early.
-      LLVM_DEBUG(dbgs() << "Collect promotables will not erase AliasSet " 
-          << (const void*)Pair.getPointer() << "\n";);  
-      
-      return false;
     };
-  
+
     auto MayAliasOutsideSetDefault = [&](PointerIntPair<PointerIntPair<const AliasSet *, 1, bool>, 1, bool /* safeset */> &Pairpair) {
       auto Pair = Pairpair.getPointer();
       ModRefInfo MR = Pair.getPointer()->aliasesUnknownInst(I, BatchAA);
@@ -2409,6 +2427,12 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
       if (isModSet(MR))
         return true;
       if (isRefSet(MR)) {
+        // If flag is set, then disable load-only promotion.
+        // This flag is used to fallback to the logic before
+        // commit-id: 88419a3
+        if (LicmNoPromoteLoadOnly) {
+          return true;
+        }
         // Remember reads outside the set.
         Pairpair.setPointer({Pair.getPointer(), true /* reads outside set*/});
         // If this is a mod-only set and there are reads outside the set,
@@ -2418,7 +2442,106 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
       return false;
     };
 
-    if (LicmUsesOwnSem) {
+    // The following table describes the decision matrix for whether an unknown instruction (function call)
+    // may read or write to the memory behind a *safe* alias set.
+    // Legend:
+    // AS: Alias Set
+    // Transfer: whether the instruction transfers ownership of the memory behind the alias set through
+    //           a move or borrow to an argument of the function call.
+    // AA Func Ref: whether the function call reads from a pointer to an alias set using AliasAnalysis (AA).
+    // AA Func Mod: whether the function call writes to a pointer to an alias set using AA.
+    // Result (Func Read): whether the function call reads from the memory behind the alias set.
+    // Result (Func Write): whether the function call writes to the memory behind the alias set.
+    // T - True, F - False, X, Y, Z - symbols (can be T or F)
+    // +----+------------+------------+----------------+----------------+------------+------------+
+    // |    | AS         | Transfer   | AA Func Ref    | AA Func Mod    | Func Read   | Func Write|
+    // +====+============+============+================+================+============+============+
+    // |  0 | Safe-RW    | Yes        | X              | Y              | X          | Y          |
+    // +----+------------+------------+----------------+----------------+------------+------------+
+    // |  1 | Safe-RW    | No         | X              | Y              | F          | F          |
+    // +----+------------+------------+----------------+----------------+------------+------------+
+    // |  2 | Safe-RO    | Z          | X              | Y              | X          | F          |
+    // +----+------------+------------+----------------+----------------+------------+------------+
+    //
+    // Discussion:
+    // INVARIANT 1: there is no execution path where we will
+    //              have interleaved Read/Write operations between caller and callee
+    //              as per stacked borrows and
+    //              tree borrows (TODO: confirm tree borrows).
+    // INVARIANT 2: If an AS is Safe-Read then a read-only borrow may exist in callee function without explicit
+    //              borrow.
+    // RULE 1:  No Mem access >_(stronger) Read-only >_(stronger) Read-Write.
+    //          We choose the stronger result between Ownsem and AA.
+    // Row 0 - If a borrow or move occurs and AA reports ModRef then we delegate to AA for strongest knowledge.
+    // Row 1 - If AS is write and no borrow or move occurs then we assume function does not read or write
+    //         to the memory behind the alias set. This is because of INVARIANT 1.
+    // Row 2 - If AS is read-only then Func can only be read-only or no mem access because of INVARIANT 2.
+    auto MayAliasOutSideSetOwnsem = [&](PointerIntPair<PointerIntPair<const AliasSet *, 1, bool>, 1, bool /* safeset*/> &Pairpair) {
+      auto Pair = Pairpair.getPointer();
+      auto UnsafePair = Pair.getPointer()->hasUnsafeOwnsemAccesses();
+      Pairpair.setInt(!UnsafePair.first); /* set set safety info */
+      if (!LicmOwnSemAS) {
+        // If we are not using ownsem then fallback to default impl.
+        return MayAliasOutsideSetDefault(Pairpair);
+      }
+      ModRefInfo MR = Pair.getPointer()->aliasesUnknownInst(I, BatchAA);
+      bool SafeSet = !UnsafePair.first;
+      LLVM_DEBUG(dbgs() << "Collect promotables, set Unsafety is: " << !SafeSet
+      << " found ownsem: " << UnsafePair.second << "\n";);
+      // Pair.getPointer()->print(OS);
+      LLVM_DEBUG(dbgs() << "Aliases unknown instr: " << *I << " mod: "
+      << isModSet(MR) << " ref:" << isRefSet(MR) << "\n";);
+
+      PrintUses(Pair.getPointer()->getPointers());
+
+      if (SafeSet) {
+        std::optional<bool> TransferToArg = Pair.getPointer()->cbMoveOrBorrowMem(I, DT);
+        bool IsSafeReadWriteAS = Pair.getPointer()->isMod();
+        bool IsSafeWriteOnlyAS = !Pair.getPointer()->isRef();
+        bool AAFuncRef = isRefSet(MR);
+        bool AAFuncMod = isModSet(MR);
+
+        // Default to what AA says
+        bool FunctionMayRead = AAFuncRef;
+        bool FunctionMayWrite = AAFuncMod;
+        auto *V = getUnderlyingObject(Pair.getPointer()->getPointers()[0]);
+        bool NotCapturedBeforeOrInLoop = isNotCapturedBeforeOrInLoop(V, L, DT);
+        if (IsSafeReadWriteAS) {
+          // Safe-Write AS
+          if (!TransferToArg.has_value()) {
+              return MayAliasOutsideSetDefault(Pairpair); // fallback conservatively
+          }
+          LLVM_DEBUG(dbgs() << "Not captured before or in loop: "
+              << NotCapturedBeforeOrInLoop << "\n";);
+          if (TransferToArg.value() == false && NotCapturedBeforeOrInLoop) {
+            // Transfer = No implies no read or write
+            // so upgrade FunctionMayRead and FunctionMayWrite
+            //FunctionMayRead = false;
+            //FunctionMayWrite = false;
+          }
+        } else if(NotCapturedBeforeOrInLoop &&
+          TransferToArg.has_value() &&
+          TransferToArg.value() == false) {
+          // Safe-ReadOnly AS
+          // so upgrade FunctionMayWrite
+          FunctionMayWrite = false;
+        }
+        LLVM_DEBUG(dbgs() << "TransferThruArgs: " << (TransferToArg.has_value() ? (TransferToArg.value() ? "Yes" : "No") : "Unknown") << "\n";);
+        LLVM_DEBUG(dbgs() << "Function may read: " << FunctionMayRead
+            << ", may write: " << FunctionMayWrite << "\n";);
+
+        Pairpair.setPointer({Pair.getPointer(), FunctionMayRead /* reads outside set*/});
+        if (FunctionMayWrite || (FunctionMayRead && IsSafeWriteOnlyAS))  {
+          return true; // cannot promote
+        }
+        return false; // can promote
+      }
+      // If unsafe AS then fallback to default impl
+      return MayAliasOutsideSetDefault(Pairpair);
+    };
+
+
+    if (isOwnsemEnabled(IsVectorizationDone)) {
       llvm::erase_if(Sets, MayAliasOutSideSetOwnsem);
     } else {
       llvm::erase_if(Sets, MayAliasOutsideSetDefault);

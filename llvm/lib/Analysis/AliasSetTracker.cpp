@@ -15,6 +15,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/Analysis/GuardUtils.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Config/llvm-config.h"
@@ -211,20 +212,20 @@ std::pair<bool, bool> AliasSet::hasUnsafeOwnsemAccesses() const {
   bool Unsafe = false;
   bool FoundOwnSemData = false;
   llvm::StringRef OwnsemKind = "ownsem";
-  
+
   for (auto *Ptr: getPointers()) {
     MDNode* OwnsemMetadata = nullptr;
     bool HasNoAliasAttr = false;
     if (isa<Instruction>(Ptr)) {
       auto *Inst = cast<Instruction>(Ptr);
-      OwnsemMetadata = Inst->getMetadata(OwnsemKind);   
+      OwnsemMetadata = Inst->getMetadata(OwnsemKind);
     } else if (isa<Instruction>(Ptr)) {
       auto *Call = cast<Instruction>(Ptr);
-      OwnsemMetadata = Call->getMetadata(OwnsemKind);   
+      OwnsemMetadata = Call->getMetadata(OwnsemKind);
     } else if (isa<Argument>(Ptr)) {
       auto *Arg = cast<Argument>(Ptr);
       HasNoAliasAttr = Arg->hasNoAliasAttr();
-    } 
+    }
     FoundOwnSemData = !(OwnsemMetadata == nullptr);
     if (!OwnsemMetadata && !HasNoAliasAttr) {
       Unsafe = true;
@@ -232,13 +233,18 @@ std::pair<bool, bool> AliasSet::hasUnsafeOwnsemAccesses() const {
     }
   }
   return std::make_pair(Unsafe, FoundOwnSemData);
-}                            
+}
 
-std::optional<bool> AliasSet::cbMoveOrBorrowMem(Value *V) const {
-  if (!isa<CallInst>(V) || !isa<InvokeInst>(V)) {
+std::optional<bool> AliasSet::cbMoveOrBorrowMem(Value *V, DominatorTree *DT) const {
+  if (!(isa<CallInst>(V) || isa<InvokeInst>(V))) {
     return std::nullopt;
   }
   auto* CB = cast<CallBase>(V);
+  if (CB->arg_size() == 0 && CB->getType()->isVoidTy()) {
+    // If the call does not take in any arguments and does not return anything,
+    // it cannot move or borrow *mut* memory.
+    return false;
+  }
   llvm::SmallPtrSet<Value *, 4> CBPtrSet;
   for (unsigned Idx = 0; Idx < CB->arg_size(); ++Idx) {
     if (CB->getArgOperand(Idx)->getType()->isPointerTy()) {
@@ -246,7 +252,21 @@ std::optional<bool> AliasSet::cbMoveOrBorrowMem(Value *V) const {
       CBPtrSet.insert(ArgPtr);
     }
   }
+  if (CB->getType()->isPointerTy()) {
+    Value *RetVal = CB;
+    for (auto *ASPtr : getPointers()) {
+      if (RetVal == ASPtr) {
+        return true;
+      }
+    }
+  }
   for (auto* ASPtr: getPointers()) {
+    // OWNSEM: Conservatively treat a capture of any arg as potential
+    // borrow/move of memory behind that arg through this call
+    // if(PointerMayBeCapturedBefore(ASPtr, /* ReturnCaptures */ true,
+    //      /* StoreCaptures */ true, CB, DT)) {
+    //   return true;
+    // }
     if (CBPtrSet.contains(ASPtr)) {
       return true;
     }
