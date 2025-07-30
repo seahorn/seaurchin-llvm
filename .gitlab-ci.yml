@@ -32,6 +32,8 @@ sync-from-github:
     git clone --single-branch --branch "$SYNC_BRANCH" "$GITHUB_REPO" github
     cd github
     git remote add gitlab "$GITLAB_REPO"
+    # Explicitly fetch the GitLab branch into tracking ref
+    git fetch gitlab "refs/heads/$SYNC_BRANCH:refs/remotes/gitlab/$SYNC_BRANCH"
     echo "Attempting fast-forward-only push from GitHub → GitLab..."
     git remote -v
     echo "CI_JOB_TOKEN is present? ${CI_JOB_TOKEN:+yes}"
