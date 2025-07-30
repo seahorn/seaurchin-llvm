@@ -1,5 +1,5 @@
 stages:
-  - prepare
+  - sync
   - build
 
 variables:
@@ -9,29 +9,40 @@ variables:
 
 workflow:
   rules:
-    # always allow the “Run pipeline” button
     - if: $CI_PIPELINE_SOURCE == "web"
       when: always
-    # still run on pushes to dev-18
-    - if: $CI_COMMIT_BRANCH == "dev-18" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev-18"
       when: always
-    # otherwise, don’t create a pipeline
+    - if: $CI_PIPELINE_SOURCE == "trigger"
+      when: always
     - when: never
 
-# prepare:
-#   stage: prepare
-#   image: git.uwaterloo.ca:5050/seaurchin/seaurchin-llvm
-#   script:
-#     - apt-get update && apt-get install -y git
-#     - git fetch origin
-#     - git checkout dev-18   
-   
-#     - pip install -r ./llvm/utils/git/requirements.txt
-
-#   artifacts:
-#     paths:
-#       - seaurchin-llvm
-#     expire_in: 2 hours
+sync-from-github:
+  stage: sync
+  image: ubuntu:22.04
+  before_script:
+    - apk add --no-cache git bash
+    - git config --global user.name "GHub to GLab Sync Bot"
+    - git config --global user.email "bot@example.com"
+  script:
+  - |
+    export GITHUB_REPO="https://github.com/seahorn/seaurchin-llvm.git"
+    export GITLAB_REPO="https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.uwaterloo.ca/seaurchin/seaurchin-llvm.git"
+    export SYNC_BRANCH="dev-18"
+    git clone --single-branch --branch "$SYNC_BRANCH" "$GITHUB_REPO" github
+    cd github
+    git remote add gitlab "$GITLAB_REPO"
+    echo "Attempting fast-forward-only push from GitHub → GitLab..."
+    if git push --ff-only gitlab "$SYNC_BRANCH:$SYNC_BRANCH"; then
+      echo "✅ Sync successful."
+    else
+      echo "❌ Sync failed: GitLab branch is ahead or diverged."
+      exit 1
+    fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
+      when: always
+    - when: never
 
 build-seaurchin-llvm-linux:
   stage: build
