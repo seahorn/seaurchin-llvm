@@ -33,10 +33,12 @@ sync-from-github:
     cd github
     git remote add gitlab "$GITLAB_REPO"
     echo "Attempting fast-forward-only push from GitHub → GitLab..."
-    if git push --ff-only gitlab "$SYNC_BRANCH:$SYNC_BRANCH"; then
-      echo "✅ Sync successful."
+    # Check if local is strictly ahead of remote
+    if git merge-base --is-ancestor "gitlab/$SYNC_BRANCH" "$SYNC_BRANCH"; then
+      echo "✅ Fast-forward possible, pushing..."
+      git push gitlab "$SYNC_BRANCH:$SYNC_BRANCH"
     else
-      echo "❌ Sync failed: GitLab branch is ahead or diverged."
+      echo "❌ Push would not be a fast-forward. Aborting."
       exit 1
     fi
   rules:
