@@ -920,6 +920,10 @@ Expected<std::pair<bool, bool>> parseLoopUnswitchOptions(StringRef Params) {
 
 Expected<LICMOptions> parseLICMOptions(StringRef Params) {
   LICMOptions Result;
+  // Set default values as per LICMPass::printPipeline expectations
+  Result.IsVectorizationDone = false;
+  Result.AllowSpeculation = true;
+
   while (!Params.empty()) {
     StringRef ParamName;
     std::tie(ParamName, Params) = Params.split(';');
@@ -927,6 +931,10 @@ Expected<LICMOptions> parseLICMOptions(StringRef Params) {
     bool Enable = !ParamName.consume_front("no-");
     if (ParamName == "allowspeculation") {
       Result.AllowSpeculation = Enable;
+    } else if (ParamName == "vectorization-done") {
+      Result.IsVectorizationDone = true;
+    } else if (ParamName == "vectorization-not-done") {
+      Result.IsVectorizationDone = false;
     } else {
       return make_error<StringError>(
           formatv("invalid LICM pass parameter '{0}' ", ParamName).str(),

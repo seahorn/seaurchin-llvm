@@ -184,13 +184,13 @@ static cl::opt<bool> LicmOwnSemSafeSetIgnoresThrow(
     "licm-ownsem-safeset-ignores-throw", cl::init(false), cl::Hidden,
     cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used for "
               " assuming that throws from a function do not return "
-              " immutably or mutably borrowed pointers"));
+              " immutably or mutably borrowed pointers."));
 
 static cl::opt<bool> LicmOwnSemSafeStoreThreadSafe(
     "licm-ownsem-safeset-store-threadsafe", cl::init(false), cl::Hidden,
     cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used for "
-              " assuming that throws from a function do not return "
-              " immutably or mutably borrowed pointers"));
+              " assuming that a safeset store in a loop (in a thread)" 
+              " does not race with another thread."));
 static cl::opt<bool> LicmOwnSemOnlyAfterVectorization(
     "licm-ownsem-only-after-vectorization", cl::init(false), cl::Hidden,
     cl::desc("[LICM & Ownsem] Enable Ownership semantics to be used only "
@@ -365,7 +365,7 @@ void LICMPass::printPipeline(
   OS << (Opts.IsVectorizationDone
      ? "vectorization-done"
      : "vectorization-not-done");
-  OS << (Opts.AllowSpeculation ? "" : ",no-") << "allowspeculation";
+  OS << (Opts.AllowSpeculation ? ";" : ";no-") << "allowspeculation";
   OS << '>';
 }
 
