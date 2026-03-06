@@ -152,6 +152,12 @@ MaxArraySize("instcombine-maxarray-size", cl::init(1024),
 static cl::opt<unsigned> ShouldLowerDbgDeclare("instcombine-lower-dbg-declare",
                                                cl::Hidden, cl::init(true));
 
+// Ownsem: Use ownership semantics for finding promotable instructions
+static cl::opt<bool> InstCombUsesOwnSem(
+    "instcombine-preserve-ownsem", cl::init(false), cl::Hidden,
+    cl::desc("[InstCombine & Ownsem] Enable preservation of Ownership semantics"
+              " for instcombine."));
+
 std::optional<Instruction *>
 InstCombiner::targetInstCombineIntrinsic(IntrinsicInst &II) {
   // Handle target specific intrinsics
@@ -2137,6 +2143,22 @@ static Instruction *foldSelectGEP(GetElementPtrInst &GEP,
   return SelectInst::Create(Cond, NewTrueC, NewFalseC, "", nullptr, Sel);
 }
 
+/// If instcombine-preserve-ownsem is set, copy the "ownsem" metadata from
+/// \p Src to \p NewVal when \p NewVal is a GetElementPtrInst. This preserves
+/// ownership-semantics tags through GEP merges whose merged result occupies the
+/// same program point as the original GEP (tag lifetime only reduced, never
+/// extended — SB violations can only decrease, not increase).
+static void propagateOwnsemMDIfFlagSet(const GetElementPtrInst &Src,
+                                    Value *NewVal) {
+  if (!InstCombUsesOwnSem)
+    return;
+  MDNode *OwnSemMD = Src.getMetadata("ownsem");
+  if (!OwnSemMD)
+    return;
+  if (auto *NewGEP = dyn_cast<GetElementPtrInst>(NewVal))
+    NewGEP->setMetadata("ownsem", OwnSemMD);
+}
+
 Instruction *InstCombinerImpl::visitGEPOfGEP(GetElementPtrInst &GEP,
                                              GEPOperator *Src) {
   // Combine Indices - If the source pointer to this getelementptr instruction
@@ -2189,12 +2211,18 @@ Instruction *InstCombinerImpl::visitGEPOfGEP(GetElementPtrInst &GEP,
     if (!Offset.isZero() || (!IsFirstType && !ConstIndices[0].isZero())) {
       // If both GEP are constant-indexed, and cannot be merged in either way,
       // convert them to a GEP of i8.
-      if (Src->hasAllConstantIndices())
-        return replaceInstUsesWith(
-            GEP, Builder.CreateGEP(
-                     Builder.getInt8Ty(), Src->getOperand(0),
-                     Builder.getInt(OffsetOld), "",
-                     isMergedGEPInBounds(*Src, *cast<GEPOperator>(&GEP))));
+      if (Src->hasAllConstantIndices()) {
+        // ownsem: Propagate ownsem metadata to merged GEP when flag is set;
+        // otherwise merged GEP is Raw. Safe: merged GEP is at same position as
+        // original GEP, so tag lifetime is only reduced — SB violations can only
+        // decrease, not increase.
+        Value *NewI = Builder.CreateGEP(
+            Builder.getInt8Ty(), Src->getOperand(0),
+            Builder.getInt(OffsetOld), "",
+            isMergedGEPInBounds(*Src, *cast<GEPOperator>(&GEP)));
+        propagateOwnsemMDIfFlagSet(GEP, NewI);
+        return replaceInstUsesWith(GEP, NewI);
+      }
       return nullptr;
     }
 
@@ -2211,9 +2239,14 @@ Instruction *InstCombinerImpl::visitGEPOfGEP(GetElementPtrInst &GEP,
       IsInBounds &= Idx.isNonNegative() == ConstIndices[0].isNonNegative();
     }
 
-    return replaceInstUsesWith(
-        GEP, Builder.CreateGEP(Src->getSourceElementType(), Src->getOperand(0),
-                               Indices, "", IsInBounds));
+    // Ownsem: Propagate ownsem metadata to merged GEP when flag is set;
+    // otherwise merged GEP is Raw. Safe: merged GEP is at same position as
+    // original GEP, so tag lifetime is only reduced — SB violations can only
+    // decrease, not increase.
+    Value *NewI = Builder.CreateGEP(Src->getSourceElementType(),
+                                    Src->getOperand(0), Indices, "", IsInBounds);
+    propagateOwnsemMDIfFlagSet(GEP, NewI);
+    return replaceInstUsesWith(GEP, NewI);
   }
 
   if (Src->getResultElementType() != GEP.getSourceElementType())
@@ -2266,11 +2299,17 @@ Instruction *InstCombinerImpl::visitGEPOfGEP(GetElementPtrInst &GEP,
     Indices.append(GEP.idx_begin()+1, GEP.idx_end());
   }
 
-  if (!Indices.empty())
-    return replaceInstUsesWith(
-        GEP, Builder.CreateGEP(
-                 Src->getSourceElementType(), Src->getOperand(0), Indices, "",
-                 isMergedGEPInBounds(*Src, *cast<GEPOperator>(&GEP))));
+  if (!Indices.empty()) {
+    // ownsem: Propagate ownsem metadata to merged GEP when flag is set;
+    // otherwise merged GEP is Raw. Safe: merged GEP is at same position as
+    // original GEP, so tag lifetime is only reduced — SB violations can only
+    // decrease, not increase.
+    Value *NewI = Builder.CreateGEP(
+        Src->getSourceElementType(), Src->getOperand(0), Indices, "",
+        isMergedGEPInBounds(*Src, *cast<GEPOperator>(&GEP)));
+    propagateOwnsemMDIfFlagSet(GEP, NewI);
+    return replaceInstUsesWith(GEP, NewI);
+  }
 
   return nullptr;
 }
@@ -2528,6 +2567,26 @@ Instruction *InstCombinerImpl::visitGetElementPtrInst(GetElementPtrInst &GEP) {
     // removed.
     if (DI != -1 && !PN->hasOneUse())
       return nullptr;
+    // Ownsem: This GEP temporarily violates SB. 
+    // However, it will be merged with the current GEP, so the final result will not violate SB.
+    // Ex:
+    // ; Before:
+    // bb1:
+    //   %gep1 = getelementptr i32, ptr %base, i64 5
+    //   br label %merge
+    // bb2:
+    //   %gep2 = getelementptr i32, ptr %base, i64 5    ; identical to %gep1 → DI == -1
+    //   br label %merge
+    // merge:
+    //   %phi = phi ptr [%gep1, %bb1], [%gep2, %bb2]
+    //   store i32 42, ptr %phi                          ; access through %phi
+    //   %result = getelementptr i32, ptr %phi, i64 4
+    // ; After:
+    // merge:
+    //   %phi  = phi ptr [%gep1, %bb1], [%gep2, %bb2]
+    //   %newgep = getelementptr i32, ptr %base, i64 5   ; added ABOVE the store
+    //   store i32 42, ptr %phi                           ; store through %phi, same address as %newgep
+    //   %result = getelementptr i32, ptr %newgep, i64 4  ; uses %newgep
 
     auto *NewGEP = cast<GetElementPtrInst>(Op1->clone());
     if (DI == -1) {
@@ -2621,10 +2680,17 @@ Instruction *InstCombinerImpl::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       // as:
       //   %newptr = getelementptr i32, ptr %ptr, i64 %idx1
       //   %newgep = getelementptr i32, ptr %newptr, i64 %idx2
+
+      // Ownsem: Added GEP is a temporary so make it own/mutbor/bor if original was. 
+      // Safe: new GEP is at same position as original GEP, so tag lifetime
+      // is only reduced — SB violations can only decrease, not increase.
       auto *NewPtr = Builder.CreateGEP(GEP.getResultElementType(),
                                        GEP.getPointerOperand(), Idx1);
-      return GetElementPtrInst::Create(GEP.getResultElementType(), NewPtr,
-                                       Idx2);
+      propagateOwnsemMDIfFlagSet(GEP, NewPtr);
+      auto *NewGEP = GetElementPtrInst::Create(GEP.getResultElementType(),
+                                               NewPtr, Idx2);
+      propagateOwnsemMDIfFlagSet(GEP, NewGEP);
+      return NewGEP;
     }
     ConstantInt *C;
     if (match(GEP.getOperand(1), m_OneUse(m_SExtLike(m_OneUse(m_NSWAdd(
@@ -2638,9 +2704,12 @@ Instruction *InstCombinerImpl::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       auto *NewPtr = Builder.CreateGEP(
           GEP.getResultElementType(), GEP.getPointerOperand(),
           Builder.CreateSExt(Idx1, GEP.getOperand(1)->getType()));
-      return GetElementPtrInst::Create(
+      propagateOwnsemMDIfFlagSet(GEP, NewPtr);
+      auto *NewGEP = GetElementPtrInst::Create(
           GEP.getResultElementType(), NewPtr,
           Builder.CreateSExt(C, GEP.getOperand(1)->getType()));
+      propagateOwnsemMDIfFlagSet(GEP, NewGEP);
+      return NewGEP;
     }
   }
 

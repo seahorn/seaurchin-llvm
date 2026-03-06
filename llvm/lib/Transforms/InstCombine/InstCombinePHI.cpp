@@ -602,6 +602,8 @@ Instruction *InstCombinerImpl::foldPHIArgGEPIntoPHI(PHINode &PN) {
     }
   }
 
+  // Ownsem: Safe under SB — new GEP replaces N predecessor GEPs (hasOneUse enforced),
+  // tag created later so lifetime strictly reduced.
   Value *Base = FixedOperands[0];
   GetElementPtrInst *NewGEP =
       GetElementPtrInst::Create(FirstInst->getSourceElementType(), Base,
