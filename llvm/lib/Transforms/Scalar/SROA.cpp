@@ -123,6 +123,13 @@ static cl::opt<bool> SROAStrictInbounds("sroa-strict-inbounds", cl::init(false),
 /// Disable running mem2reg during SROA in order to test or debug SROA.
 static cl::opt<bool> SROASkipMem2Reg("sroa-skip-mem2reg", cl::init(false),
                                      cl::Hidden);
+
+// Ownsem: Use ownership semantics for finding promotable instructions
+static cl::opt<bool> SROAUsesOwnSem(
+    "sroa-preserve-ownsem", cl::init(false), cl::Hidden,
+    cl::desc("[SROA & Ownsem] Enable preservation of Ownership semantics"
+              " for SROA."));
+
 namespace {
 
 class AllocaSliceRewriter;
@@ -3690,6 +3697,22 @@ private:
 
 /// Visitor to rewrite aggregate loads and stores as scalar.
 ///
+/// If sroa-preserve-ownsem is set, copy the "ownsem" metadata from \p Src to
+/// \p NewVal when \p NewVal is a GetElementPtrInst. This preserves ownership-
+/// semantics tags through GEP transforms where the result occupies the same or
+/// later program point as the original GEP (tag lifetime only reduced, never
+/// extended — SB violations can only decrease, not increase).
+static void transferOwnsemMDIfFlagSet(const GetElementPtrInst &Src,
+                                   Value *NewVal) {
+  if (!SROAUsesOwnSem)
+    return;
+  MDNode *OwnSemMD = Src.getMetadata("ownsem");
+  if (!OwnSemMD)
+    return;
+  if (auto *NewGEP = dyn_cast<GetElementPtrInst>(NewVal))
+    NewGEP->setMetadata("ownsem", OwnSemMD);
+}
+
 /// This pass aggressively rewrites all aggregate loads and stores on
 /// a particular pointer (or any pointer derived from it which we can identify)
 /// with scalar loads and stores.
@@ -3974,6 +3997,7 @@ private:
                       << "\n    original: " << *Sel
                       << "\n              " << GEPI);
 
+    // Ownsem: The GEPs are created at old GEP point as do not cross memory accesses. 
     IRB.SetInsertPoint(&GEPI);
     SmallVector<Value *, 4> Index(GEPI.indices());
     bool IsInBounds = GEPI.isInBounds();
@@ -3982,11 +4006,13 @@ private:
     Value *True = Sel->getTrueValue();
     Value *NTrue = IRB.CreateGEP(Ty, True, Index, True->getName() + ".sroa.gep",
                                  IsInBounds);
+    transferOwnsemMDIfFlagSet(GEPI, NTrue);
 
     Value *False = Sel->getFalseValue();
 
     Value *NFalse = IRB.CreateGEP(Ty, False, Index,
                                   False->getName() + ".sroa.gep", IsInBounds);
+    transferOwnsemMDIfFlagSet(GEPI, NFalse);
 
     Value *NSel = IRB.CreateSelect(Sel->getCondition(), NTrue, NFalse,
                                    Sel->getName() + ".sroa.sel");
@@ -4038,10 +4064,17 @@ private:
       } else {
         Instruction *In = cast<Instruction>(PHI->getIncomingValue(I));
 
-        IRB.SetInsertPoint(In->getParent(), std::next(In->getIterator()));
+        // Ownsem: insert just before the terminator so the GEP tag is created
+        // after all stores in the predecessor — matching the temporal ordering
+        // of the before-IR where the GEP lived in the merge block.
+        if (SROAUsesOwnSem)
+          IRB.SetInsertPoint(In->getParent()->getTerminator());
+        else
+          IRB.SetInsertPoint(In->getParent(), std::next(In->getIterator()));
         Type *Ty = GEPI.getSourceElementType();
         NewVal = IRB.CreateGEP(Ty, In, Index, In->getName() + ".sroa.gep",
                                IsInBounds);
+        transferOwnsemMDIfFlagSet(GEPI, NewVal);
       }
       NewPN->addIncoming(NewVal, B);
     }
