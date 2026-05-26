@@ -32,6 +32,7 @@ jobs:
 
     - name: Build/test/install seaurchin-llvm
       run: |
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
         echo "Showing last 3 commits in LLVM repo:"
         git log -n 3 --oneline
         mkdir -p /mnt && chown -R $(id -u):$(id -g) /mnt
