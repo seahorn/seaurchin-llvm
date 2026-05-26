@@ -235,6 +235,45 @@ std::pair<bool, bool> AliasSet::hasUnsafeOwnsemAccesses() const {
   return std::make_pair(Unsafe, FoundOwnSemData);
 }
 
+std::pair<bool, bool> AliasSet::hasOnlyOwnsemMutBorPointers() const {
+  bool AllMutBor = true;
+  bool FoundOwnSemData = false;
+  StringRef OwnsemKind = "ownsem";
+
+  // Return false for empty alias sets.
+  if (MemoryLocs.empty())
+    return std::make_pair(false, false);
+
+  for (const auto *Ptr : getPointers()) {
+    if (const auto *Inst = dyn_cast<Instruction>(Ptr)) {
+      MDNode *OwnsemMetadata = Inst->getMetadata(OwnsemKind);
+      if (!OwnsemMetadata || OwnsemMetadata->getNumOperands() == 0) {
+        AllMutBor = false;
+        break;
+      }
+      FoundOwnSemData = true;
+
+      auto *MDS = dyn_cast<MDString>(OwnsemMetadata->getOperand(0));
+      if (!MDS || MDS->getString() != "mutbor") {
+        AllMutBor = false;
+        break;
+      }
+    } else if (const auto *Arg = dyn_cast<Argument>(Ptr)) {
+      // A noalias argument corresponds to a mutable borrow in Rust semantics.
+      if (!Arg->hasNoAliasAttr()) {
+        AllMutBor = false;
+        break;
+      }
+    } else {
+      // Unknown pointer kind — conservatively bail out.
+      AllMutBor = false;
+      break;
+    }
+  }
+
+  return std::make_pair(AllMutBor, FoundOwnSemData);
+}
+
 std::optional<bool> AliasSet::cbMoveOrBorrowMem(Value *V, DominatorTree *DT) const {
   if (!(isa<CallInst>(V) || isa<InvokeInst>(V))) {
     return std::nullopt;

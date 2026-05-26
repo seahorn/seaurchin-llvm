@@ -495,7 +495,7 @@ FUNCTION_PASS_WITH_PARAMS(
     [](InstCombineOptions Opts) { return InstCombinePass(Opts); },
     parseInstCombineOptions,
     "no-use-loop-info;use-loop-info;no-verify-fixpoint;verify-fixpoint;"
-    "max-iterations=N")
+    "no-ownsem-semantics;ownsem-semantics;max-iterations=N")
 FUNCTION_PASS_WITH_PARAMS(
     "loop-unroll", "LoopUnrollPass",
     [](LoopUnrollOptions Opts) { return LoopUnrollPass(Opts); },
@@ -557,8 +557,11 @@ FUNCTION_PASS_WITH_PARAMS(
     parseSpeculativeExecutionPassOptions, "only-if-divergent-target")
 FUNCTION_PASS_WITH_PARAMS(
     "sroa", "SROAPass",
-    [](SROAOptions PreserveCFG) { return SROAPass(PreserveCFG); },
-    parseSROAOptions, "preserve-cfg;modify-cfg")
+    [](SROAPassOptions Opts) {
+      return SROAPass(Opts.PreserveCFG, Opts.OwnsemSemantics);
+    },
+    parseSROAOptions,
+    "preserve-cfg;modify-cfg;no-ownsem-semantics;ownsem-semantics")
 FUNCTION_PASS_WITH_PARAMS(
     "win-eh-prepare", "WinEHPreparePass",
     [](bool DemoteCatchSwitchPHIOnly) {
@@ -616,18 +619,20 @@ LOOP_PASS("print<loopnest>", LoopNestPrinterPass(dbgs()))
 #endif
 LOOP_PASS_WITH_PARAMS(
     "licm", "LICMPass", [](LICMOptions Params) { return LICMPass(Params); },
-    parseLICMOptions, "allowspeculation")
+    parseLICMOptions, "allowspeculation;no-ownsem-semantics;ownsem-semantics")
 LOOP_PASS_WITH_PARAMS(
     "lnicm", "LNICMPass", [](LICMOptions Params) { return LNICMPass(Params); },
     parseLICMOptions, "allowspeculation")
 LOOP_PASS_WITH_PARAMS(
     "loop-rotate", "LoopRotatePass",
-    [](std::pair<bool, bool> Params) {
-      return LoopRotatePass(Params.first, Params.second);
+    [](std::tuple<bool, bool, bool> Params) {
+      return LoopRotatePass(std::get<0>(Params), std::get<1>(Params),
+                            std::get<2>(Params));
     },
     parseLoopRotateOptions,
     "no-header-duplication;header-duplication;"
-    "no-prepare-for-lto;prepare-for-lto")
+    "no-prepare-for-lto;prepare-for-lto;"
+    "no-ownsem-semantics;ownsem-semantics")
 LOOP_PASS_WITH_PARAMS(
     "simple-loop-unswitch", "SimpleLoopUnswitchPass",
     [](std::pair<bool, bool> Params) {

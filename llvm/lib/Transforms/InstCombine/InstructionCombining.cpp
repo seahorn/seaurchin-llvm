@@ -158,6 +158,10 @@ static cl::opt<bool> InstCombUsesOwnSem(
     cl::desc("[InstCombine & Ownsem] Enable preservation of Ownership semantics"
               " for instcombine."));
 
+// Set from InstCombineOptions::OwnsemSemantics at the start of each invocation.
+// True when ownership semantics should be preserved in this InstCombine run.
+static bool InstCombOwnsemSemantics = false;
+
 std::optional<Instruction *>
 InstCombiner::targetInstCombineIntrinsic(IntrinsicInst &II) {
   // Handle target specific intrinsics
@@ -2150,7 +2154,7 @@ static Instruction *foldSelectGEP(GetElementPtrInst &GEP,
 /// extended — SB violations can only decrease, not increase).
 static void propagateOwnsemMDIfFlagSet(const GetElementPtrInst &Src,
                                     Value *NewVal) {
-  if (!InstCombUsesOwnSem)
+  if (!(InstCombUsesOwnSem && InstCombOwnsemSemantics))
     return;
   MDNode *OwnSemMD = Src.getMetadata("ownsem");
   if (!OwnSemMD)
@@ -4825,6 +4829,7 @@ static bool combineInstructionsOverFunction(
     AssumptionCache &AC, TargetLibraryInfo &TLI, TargetTransformInfo &TTI,
     DominatorTree &DT, OptimizationRemarkEmitter &ORE, BlockFrequencyInfo *BFI,
     ProfileSummaryInfo *PSI, LoopInfo *LI, const InstCombineOptions &Opts) {
+  InstCombOwnsemSemantics = Opts.OwnsemSemantics;
   auto &DL = F.getParent()->getDataLayout();
 
   /// Builder - This is an IRBuilder that automatically inserts new
@@ -4898,7 +4903,8 @@ void InstCombinePass::printPipeline(
   OS << '<';
   OS << "max-iterations=" << Options.MaxIterations << ";";
   OS << (Options.UseLoopInfo ? "" : "no-") << "use-loop-info;";
-  OS << (Options.VerifyFixpoint ? "" : "no-") << "verify-fixpoint";
+  OS << (Options.VerifyFixpoint ? "" : "no-") << "verify-fixpoint;";
+  OS << (Options.OwnsemSemantics ? "" : "no-") << "ownsem-semantics";
   OS << '>';
 }
 

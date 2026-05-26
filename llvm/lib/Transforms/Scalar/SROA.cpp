@@ -130,6 +130,10 @@ static cl::opt<bool> SROAUsesOwnSem(
     cl::desc("[SROA & Ownsem] Enable preservation of Ownership semantics"
               " for SROA."));
 
+// Set from SROAPass::OwnsemSemantics at the start of each invocation.
+// True when ownership semantics should be preserved in this SROA run.
+static bool SROAOwnsemSemantics = false;
+
 namespace {
 
 class AllocaSliceRewriter;
@@ -3704,7 +3708,7 @@ private:
 /// extended — SB violations can only decrease, not increase).
 static void transferOwnsemMDIfFlagSet(const GetElementPtrInst &Src,
                                    Value *NewVal) {
-  if (!SROAUsesOwnSem)
+  if (!(SROAUsesOwnSem && SROAOwnsemSemantics))
     return;
   MDNode *OwnSemMD = Src.getMetadata("ownsem");
   if (!OwnSemMD)
@@ -4034,7 +4038,15 @@ private:
   bool foldGEPPhi(GetElementPtrInst &GEPI) {
     if (!GEPI.hasAllConstantIndices())
       return false;
-
+    if (SROAUsesOwnSem && SROAOwnsemSemantics) {
+      // No instruction between the last PHI and GEPI may access memory.
+      // Folding moves tag creation into predecessor blocks (before the
+      // terminator), which could place it before an aliasing store in the
+      // current block that sits between the PHI and the GEP.
+      for (auto It = GEPI.getParent()->getFirstNonPHIIt(); &*It != &GEPI; ++It)
+        if (It->mayReadOrWriteMemory())
+          return false;
+    }
     PHINode *PHI = cast<PHINode>(GEPI.getPointerOperand());
     if (GEPI.getParent() != PHI->getParent() ||
         llvm::any_of(PHI->incoming_values(), [](Value *In)
@@ -4067,7 +4079,7 @@ private:
         // Ownsem: insert just before the terminator so the GEP tag is created
         // after all stores in the predecessor — matching the temporal ordering
         // of the before-IR where the GEP lived in the merge block.
-        if (SROAUsesOwnSem)
+        if (SROAUsesOwnSem && SROAOwnsemSemantics)
           IRB.SetInsertPoint(In->getParent()->getTerminator());
         else
           IRB.SetInsertPoint(In->getParent(), std::next(In->getIterator()));
@@ -5401,6 +5413,7 @@ std::pair<bool /*Changed*/, bool /*CFGChanged*/> SROA::runSROA(Function &F) {
 }
 
 PreservedAnalyses SROAPass::run(Function &F, FunctionAnalysisManager &AM) {
+  SROAOwnsemSemantics = OwnsemSemantics;
   DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
   AssumptionCache &AC = AM.getResult<AssumptionAnalysis>(F);
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
@@ -5419,11 +5432,14 @@ void SROAPass::printPipeline(
     raw_ostream &OS, function_ref<StringRef(StringRef)> MapClassName2PassName) {
   static_cast<PassInfoMixin<SROAPass> *>(this)->printPipeline(
       OS, MapClassName2PassName);
-  OS << (PreserveCFG == SROAOptions::PreserveCFG ? "<preserve-cfg>"
-                                                 : "<modify-cfg>");
+  OS << '<';
+  OS << (PreserveCFG == SROAOptions::PreserveCFG ? "preserve-cfg" : "modify-cfg");
+  OS << ';' << (OwnsemSemantics ? "" : "no-") << "ownsem-semantics";
+  OS << '>';
 }
 
-SROAPass::SROAPass(SROAOptions PreserveCFG) : PreserveCFG(PreserveCFG) {}
+SROAPass::SROAPass(SROAOptions PreserveCFG, bool OwnsemSemantics)
+    : PreserveCFG(PreserveCFG), OwnsemSemantics(OwnsemSemantics) {}
 
 namespace {
 

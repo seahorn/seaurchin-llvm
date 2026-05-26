@@ -139,6 +139,12 @@ public:
   /// apart from arg attribute)
   std::pair<bool, bool> hasUnsafeOwnsemAccesses() const;            
 
+  /// Return a pair with first (AllMutBor) indicating whether every pointer
+  /// in this alias set has ownsem "mutbor" metadata or is a noalias argument,
+  /// and second (FoundOwnSemData) indicating whether ownsem metadata was found.
+  /// Returns {false, false} for empty alias sets.
+  std::pair<bool, bool> hasOnlyOwnsemMutBorPointers() const;
+
   /// Returns true if CallBase moves or borrows memory.
   /// Returns false if CallBase does not move or borrow memory.
   /// Returns nullopt if it cannot determine.

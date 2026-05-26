@@ -858,6 +858,8 @@ Expected<InstCombineOptions> parseInstCombineOptions(StringRef Params) {
       Result.setUseLoopInfo(Enable);
     } else if (ParamName == "verify-fixpoint") {
       Result.setVerifyFixpoint(Enable);
+    } else if (ParamName == "ownsem-semantics") {
+      Result.setOwnsemSemantics(Enable);
     } else if (Enable && ParamName.consume_front("max-iterations=")) {
       APInt MaxIterations;
       if (ParamName.getAsInteger(0, MaxIterations))
@@ -935,6 +937,8 @@ Expected<LICMOptions> parseLICMOptions(StringRef Params) {
       Result.IsVectorizationDone = true;
     } else if (ParamName == "vectorization-not-done") {
       Result.IsVectorizationDone = false;
+    } else if (ParamName == "ownsem-semantics") {
+      Result.OwnsemSemantics = Enable;
     } else {
       return make_error<StringError>(
           formatv("invalid LICM pass parameter '{0}' ", ParamName).str(),
@@ -944,17 +948,19 @@ Expected<LICMOptions> parseLICMOptions(StringRef Params) {
   return Result;
 }
 
-Expected<std::pair<bool, bool>> parseLoopRotateOptions(StringRef Params) {
-  std::pair<bool, bool> Result = {true, false};
+Expected<std::tuple<bool, bool, bool>> parseLoopRotateOptions(StringRef Params) {
+  std::tuple<bool, bool, bool> Result = {true, false, false};
   while (!Params.empty()) {
     StringRef ParamName;
     std::tie(ParamName, Params) = Params.split(';');
 
     bool Enable = !ParamName.consume_front("no-");
     if (ParamName == "header-duplication") {
-      Result.first = Enable;
+      std::get<0>(Result) = Enable;
     } else if (ParamName == "prepare-for-lto") {
-      Result.second = Enable;
+      std::get<1>(Result) = Enable;
+    } else if (ParamName == "ownsem-semantics") {
+      std::get<2>(Result) = Enable;
     } else {
       return make_error<StringError>(
           formatv("invalid LoopRotate pass parameter '{0}' ", ParamName).str(),
@@ -1025,17 +1031,28 @@ Expected<IPSCCPOptions> parseIPSCCPOptions(StringRef Params) {
   return Result;
 }
 
-Expected<SROAOptions> parseSROAOptions(StringRef Params) {
-  if (Params.empty() || Params == "modify-cfg")
-    return SROAOptions::ModifyCFG;
-  if (Params == "preserve-cfg")
-    return SROAOptions::PreserveCFG;
-  return make_error<StringError>(
-      formatv("invalid SROA pass parameter '{0}' (either preserve-cfg or "
-              "modify-cfg can be specified)",
-              Params)
-          .str(),
-      inconvertibleErrorCode());
+Expected<SROAPassOptions> parseSROAOptions(StringRef Params) {
+  SROAPassOptions Result;
+  while (!Params.empty()) {
+    StringRef ParamName;
+    std::tie(ParamName, Params) = Params.split(';');
+
+    if (ParamName == "modify-cfg") {
+      Result.PreserveCFG = SROAOptions::ModifyCFG;
+    } else if (ParamName == "preserve-cfg") {
+      Result.PreserveCFG = SROAOptions::PreserveCFG;
+    } else {
+      bool Enable = !ParamName.consume_front("no-");
+      if (ParamName == "ownsem-semantics") {
+        Result.OwnsemSemantics = Enable;
+      } else {
+        return make_error<StringError>(
+            formatv("invalid SROA pass parameter '{0}'", ParamName).str(),
+            inconvertibleErrorCode());
+      }
+    }
+  }
+  return Result;
 }
 
 Expected<StackLifetime::LivenessType>

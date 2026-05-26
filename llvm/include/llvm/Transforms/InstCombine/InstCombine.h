@@ -31,6 +31,8 @@ struct InstCombineOptions {
   bool UseLoopInfo = false;
   // Verify that a fix point has been reached after MaxIterations.
   bool VerifyFixpoint = false;
+  // True when ownership semantics should be preserved in this invocation.
+  bool OwnsemSemantics = false;
   unsigned MaxIterations = InstCombineDefaultMaxIterations;
 
   InstCombineOptions() = default;
@@ -42,6 +44,11 @@ struct InstCombineOptions {
 
   InstCombineOptions &setVerifyFixpoint(bool Value) {
     VerifyFixpoint = Value;
+    return *this;
+  }
+
+  InstCombineOptions &setOwnsemSemantics(bool Value) {
+    OwnsemSemantics = Value;
     return *this;
   }
 

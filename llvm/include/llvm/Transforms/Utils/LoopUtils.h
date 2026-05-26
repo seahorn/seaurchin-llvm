@@ -152,7 +152,7 @@ bool sinkRegion(DomTreeNode *, AAResults *, LoopInfo *, DominatorTree *,
                 TargetLibraryInfo *, TargetTransformInfo *, Loop *CurLoop,
                 MemorySSAUpdater &, ICFLoopSafetyInfo *,
                 SinkAndHoistLICMFlags &, OptimizationRemarkEmitter *,
-                Loop *OutermostLoop = nullptr);
+                Loop *OutermostLoop = nullptr, bool OwnsemEnabled = false);
 
 /// Call sinkRegion on loops contained within the specified loop
 /// in order from innermost to outermost.
@@ -160,7 +160,8 @@ bool sinkRegionForLoopNest(DomTreeNode *, AAResults *, LoopInfo *,
                            DominatorTree *, TargetLibraryInfo *,
                            TargetTransformInfo *, Loop *, MemorySSAUpdater &,
                            ICFLoopSafetyInfo *, SinkAndHoistLICMFlags &,
-                           OptimizationRemarkEmitter *);
+                           OptimizationRemarkEmitter *,
+                           bool OwnsemEnabled = false);
 
 /// Walk the specified region of the CFG (defined by all blocks
 /// dominated by the specified block, and that are in the current loop) in depth
@@ -176,7 +177,7 @@ bool hoistRegion(DomTreeNode *, AAResults *, LoopInfo *, DominatorTree *,
                  AssumptionCache *, TargetLibraryInfo *, Loop *,
                  MemorySSAUpdater &, ScalarEvolution *, ICFLoopSafetyInfo *,
                  SinkAndHoistLICMFlags &, OptimizationRemarkEmitter *, bool,
-                 bool AllowSpeculation);
+                 bool AllowSpeculation, bool OwnsemEnabled = false);
 
 /// Return true if the induction variable \p IV in a Loop whose latch is
 /// \p LatchBlock would become dead if the exit test \p Cond were removed.
@@ -219,7 +220,8 @@ bool promoteLoopAccessesToScalars(
     PredIteratorCache &, LoopInfo *, DominatorTree *, AssumptionCache *AC,
     const TargetLibraryInfo *, TargetTransformInfo *, Loop *,
     MemorySSAUpdater &, ICFLoopSafetyInfo *, OptimizationRemarkEmitter *,
-    bool AllowSpeculation, bool HasReadsOutsideSet, bool IsSafeSet, bool IsVectorizationDone);
+    bool AllowSpeculation, bool HasReadsOutsideSet, bool IsSafeSet, bool IsVectorizationDone,
+    bool OwnsemSemantics = false);
 
 /// Does a BFS from a given node to all of its children inside a given loop.
 /// The returned vector of nodes includes the starting point.

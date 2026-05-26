@@ -52,6 +52,12 @@ static cl::opt<bool>
                 cl::desc("Allow loop rotation multiple times in order to reach "
                          "a better latch exit"));
 
+static cl::opt<bool> LoopRotatePreservesOwnsem(
+    "loop-rotate-preserves-ownsem", cl::init(false), cl::Hidden,
+    cl::desc("[LoopRotate & Ownsem] When enabled together with ownsem-semantics, "
+             "treat GEP instructions as having side-effects so they are cloned "
+             "rather than hoisted during loop rotation."));
+
 // Probability that a rotated loop has zero trip count / is never entered.
 static constexpr uint32_t ZeroTripCountWeights[] = {1, 127};
 
@@ -69,16 +75,18 @@ class LoopRotate {
   bool RotationOnly;
   bool IsUtilMode;
   bool PrepareForLTO;
+  bool OwnsemSemantics;
 
 public:
   LoopRotate(unsigned MaxHeaderSize, LoopInfo *LI,
              const TargetTransformInfo *TTI, AssumptionCache *AC,
              DominatorTree *DT, ScalarEvolution *SE, MemorySSAUpdater *MSSAU,
              const SimplifyQuery &SQ, bool RotationOnly, bool IsUtilMode,
-             bool PrepareForLTO)
+             bool PrepareForLTO, bool OwnsemSemantics = false)
       : MaxHeaderSize(MaxHeaderSize), LI(LI), TTI(TTI), AC(AC), DT(DT), SE(SE),
         MSSAU(MSSAU), SQ(SQ), RotationOnly(RotationOnly),
-        IsUtilMode(IsUtilMode), PrepareForLTO(PrepareForLTO) {}
+        IsUtilMode(IsUtilMode), PrepareForLTO(PrepareForLTO),
+        OwnsemSemantics(OwnsemSemantics) {}
   bool processLoop(Loop *L);
 
 private:
@@ -607,9 +615,12 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
       // executing in each iteration of the loop.  This means it is safe to hoist
       // something that might trap, but isn't safe to hoist something that reads
       // memory (without proving that the loop doesn't write).
+      
       if (L->hasLoopInvariantOperands(Inst) && !Inst->mayReadFromMemory() &&
           !Inst->mayWriteToMemory() && !Inst->isTerminator() &&
-          !isa<DbgInfoIntrinsic>(Inst) && !isa<AllocaInst>(Inst)) {
+          !isa<DbgInfoIntrinsic>(Inst) && !isa<AllocaInst>(Inst) &&
+          !(LoopRotatePreservesOwnsem && OwnsemSemantics &&
+            isa<GetElementPtrInst>(Inst))) {
 
         if (LoopEntryBranch->getParent()->IsNewDbgInfoFormat) {
           auto DbgValueRange =
@@ -1053,8 +1064,9 @@ bool llvm::LoopRotation(Loop *L, LoopInfo *LI, const TargetTransformInfo *TTI,
                         ScalarEvolution *SE, MemorySSAUpdater *MSSAU,
                         const SimplifyQuery &SQ, bool RotationOnly = true,
                         unsigned Threshold = unsigned(-1),
-                        bool IsUtilMode = true, bool PrepareForLTO) {
+                        bool IsUtilMode = true, bool PrepareForLTO,
+                        bool OwnsemSemantics) {
   LoopRotate LR(Threshold, LI, TTI, AC, DT, SE, MSSAU, SQ, RotationOnly,
-                IsUtilMode, PrepareForLTO);
+                IsUtilMode, PrepareForLTO, OwnsemSemantics);
   return LR.processLoop(L);
 }

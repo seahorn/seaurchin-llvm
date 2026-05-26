@@ -23,13 +23,20 @@ class Function;
 
 enum class SROAOptions : bool { ModifyCFG, PreserveCFG };
 
+/// Options for configuring the SROA pass via text pipeline.
+struct SROAPassOptions {
+  SROAOptions PreserveCFG = SROAOptions::ModifyCFG;
+  bool OwnsemSemantics = false;
+};
+
 class SROAPass : public PassInfoMixin<SROAPass> {
   const SROAOptions PreserveCFG;
+  const bool OwnsemSemantics;
 
 public:
   /// If \p PreserveCFG is set, then the pass is not allowed to modify CFG
   /// in any way, even if it would update CFG analyses.
-  SROAPass(SROAOptions PreserveCFG);
+  SROAPass(SROAOptions PreserveCFG, bool OwnsemSemantics = false);
 
   /// Run the pass over the function.
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);

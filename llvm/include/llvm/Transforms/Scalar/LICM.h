@@ -50,19 +50,26 @@ struct LICMOptions {
   unsigned MssaNoAccForPromotionCap;
   bool AllowSpeculation;
   bool IsVectorizationDone;
+  // Ownsem: when true, hoistGEP skips if any may-alias store remains in the
+  // loop body (i.e. was not sunk before this LICM iteration). Only set for
+  // the first LICM invocation in the -O3 pipeline, before stores are sunk.
+  bool OwnsemSemantics;
 
   LICMOptions()
       : MssaOptCap(SetLicmMssaOptCap),
         MssaNoAccForPromotionCap(SetLicmMssaNoAccForPromotionCap),
         AllowSpeculation(true),
-        IsVectorizationDone(false) {}
+        IsVectorizationDone(false),
+        OwnsemSemantics(false) {}
 
   LICMOptions(unsigned MssaOptCap, unsigned MssaNoAccForPromotionCap,
-              bool AllowSpeculation, bool IsVectorizationDone)
+              bool AllowSpeculation, bool IsVectorizationDone,
+              bool OwnsemSemantics = false)
       : MssaOptCap(MssaOptCap),
         MssaNoAccForPromotionCap(MssaNoAccForPromotionCap),
         AllowSpeculation(AllowSpeculation),
-        IsVectorizationDone(IsVectorizationDone) {}
+        IsVectorizationDone(IsVectorizationDone),
+        OwnsemSemantics(OwnsemSemantics) {}
 };
 
 /// Performs Loop Invariant Code Motion Pass.
@@ -71,9 +78,11 @@ class LICMPass : public PassInfoMixin<LICMPass> {
 
 public:
   LICMPass(unsigned MssaOptCap, unsigned MssaNoAccForPromotionCap,
-           bool AllowSpeculation, bool IsVectorizationDone)
+           bool AllowSpeculation, bool IsVectorizationDone,
+           bool OwnsemSemantics = false)
       : LICMPass(LICMOptions(MssaOptCap, MssaNoAccForPromotionCap,
-                             AllowSpeculation, IsVectorizationDone)) {}
+                             AllowSpeculation, IsVectorizationDone,
+                             OwnsemSemantics)) {}
   LICMPass(LICMOptions Opts) : Opts(Opts) {}
 
   PreservedAnalyses run(Loop &L, LoopAnalysisManager &AM,

@@ -388,7 +388,7 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
 
   // Form SSA out of local memory accesses after breaking apart aggregates into
   // scalars.
-  FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
+  FPM.addPass(SROAPass(SROAOptions::ModifyCFG, /*OwnsemSemantics=*/true));
 
   // Catch trivial redundancies
   FPM.addPass(EarlyCSEPass(true /* Enable mem-ssa. */));
@@ -396,7 +396,7 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
   // Hoisting of scalars and load expressions.
   FPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  FPM.addPass(InstCombinePass());
+  FPM.addPass(InstCombinePass(InstCombineOptions().setOwnsemSemantics(true)));
 
   FPM.addPass(LibCallsShrinkWrapPass());
 
@@ -435,14 +435,17 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
   // TODO: Investigate promotion cap for O1.
   LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                         /*AllowSpeculation=*/false,
-                        /*IsVectorizationDone=*/false));
+                        /*IsVectorizationDone=*/false,
+                        /*OwnsemSemantics=*/true));
 
   LPM1.addPass(LoopRotatePass(/* Disable header duplication */ true,
-                              isLTOPreLink(Phase)));
+                              isLTOPreLink(Phase),
+                              /*OwnsemSemantics=*/true));
   // TODO: Investigate promotion cap for O1.
   LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                         /*AllowSpeculation=*/true,
-                        /*IsVectorizationDone=*/false));
+                        /*IsVectorizationDone=*/false,
+                        /*OwnsemSemantics=*/true));
   LPM1.addPass(SimpleLoopUnswitchPass());
   if (EnableLoopFlatten)
     LPM1.addPass(LoopFlattenPass());
@@ -536,7 +539,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
 
   // Form SSA out of local memory accesses after breaking apart aggregates into
   // scalars.
-  FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
+  FPM.addPass(SROAPass(SROAOptions::ModifyCFG, /*OwnsemSemantics=*/true));
 
   // Catch trivial redundancies
   FPM.addPass(EarlyCSEPass(true /* Enable mem-ssa. */));
@@ -563,7 +566,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
 
   FPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  FPM.addPass(InstCombinePass());
+  FPM.addPass(InstCombinePass(InstCombineOptions().setOwnsemSemantics(true)));
   FPM.addPass(AggressiveInstCombinePass());
 
   if (!Level.isOptimizingForSize())
@@ -614,15 +617,18 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   // TODO: Investigate promotion cap for O1.
   LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                         /*AllowSpeculation=*/false,
-                        /*IsVectorizationDone=*/false));
+                        /*IsVectorizationDone=*/false,
+                        /*OwnsemSemantics=*/true));
 
   // Disable header duplication in loop rotation at -Oz.
   LPM1.addPass(
-      LoopRotatePass(Level != OptimizationLevel::Oz, isLTOPreLink(Phase)));
+      LoopRotatePass(Level != OptimizationLevel::Oz, isLTOPreLink(Phase),
+                     /*OwnsemSemantics=*/true));
   // TODO: Investigate promotion cap for O1.
   LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                         /*AllowSpeculation=*/true,
-                        /*IsVectorizationDone=*/false));
+                        /*IsVectorizationDone=*/false,
+                        /*OwnsemSemantics=*/true));
   LPM1.addPass(
       SimpleLoopUnswitchPass(/* NonTrivial */ Level == OptimizationLevel::O3));
   if (EnableLoopFlatten)
@@ -758,11 +764,11 @@ void PassBuilder::addPreInlinerPasses(ModulePassManager &MPM,
   CGSCCPassManager &CGPipeline = MIWP.getPM();
 
   FunctionPassManager FPM;
-  FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
+  FPM.addPass(SROAPass(SROAOptions::ModifyCFG, /*OwnsemSemantics=*/true));
   FPM.addPass(EarlyCSEPass()); // Catch trivial redundancies.
   FPM.addPass(SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(
       true)));                    // Merge & remove basic blocks.
-  FPM.addPass(InstCombinePass()); // Combine silly sequences.
+  FPM.addPass(InstCombinePass(InstCombineOptions().setOwnsemSemantics(true))); // Combine silly sequences.
   invokePeepholeEPCallbacks(FPM, Level);
 
   CGPipeline.addPass(createCGSCCToFunctionPassAdaptor(
@@ -1042,7 +1048,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
     // SimplifyCFG.
     EarlyFPM.addPass(LowerExpectIntrinsicPass());
     EarlyFPM.addPass(SimplifyCFGPass());
-    EarlyFPM.addPass(SROAPass(SROAOptions::ModifyCFG));
+    EarlyFPM.addPass(SROAPass(SROAOptions::ModifyCFG, /*OwnsemSemantics=*/true));
     EarlyFPM.addPass(EarlyCSEPass());
     if (Level == OptimizationLevel::O3)
       EarlyFPM.addPass(CallSiteSplittingPass());
@@ -1106,7 +1112,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   FunctionPassManager GlobalCleanupPM;
   // FIXME: Should this instead by a run of SROA?
   GlobalCleanupPM.addPass(PromotePass());
-  GlobalCleanupPM.addPass(InstCombinePass());
+  GlobalCleanupPM.addPass(InstCombinePass(InstCombineOptions().setOwnsemSemantics(true)));
   invokePeepholeEPCallbacks(GlobalCleanupPM, Level);
   GlobalCleanupPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
@@ -1799,7 +1805,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   // function pointers.  When this happens, we often have to resolve varargs
   // calls, etc, so let instcombine do this.
   FunctionPassManager PeepholeFPM;
-  PeepholeFPM.addPass(InstCombinePass());
+  PeepholeFPM.addPass(InstCombinePass(InstCombineOptions().setOwnsemSemantics(true)));
   if (Level.getSpeedupLevel() > 1)
     PeepholeFPM.addPass(AggressiveInstCombinePass());
   invokePeepholeEPCallbacks(PeepholeFPM, Level);
@@ -1845,7 +1851,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
 
   FunctionPassManager FPM;
   // The IPO Passes may leave cruft around. Clean up after them.
-  FPM.addPass(InstCombinePass());
+  FPM.addPass(InstCombinePass(InstCombineOptions().setOwnsemSemantics(true)));
   invokePeepholeEPCallbacks(FPM, Level);
 
   if (EnableConstraintElimination)
@@ -1869,7 +1875,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   }
 
   // Break up allocas
-  FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
+  FPM.addPass(SROAPass(SROAOptions::ModifyCFG, /*OwnsemSemantics=*/true));
 
   // LTO provides additional opportunities for tailcall elimination due to
   // link-time inlining, and visibility of nocapture attribute.

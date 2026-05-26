@@ -199,8 +199,9 @@ static cl::opt<bool> LicmOwnSemOnlyAfterVectorization(
 static cl::opt<bool> LicmNoPromoteLoadOnly(
     "licm-no-promote-load-only", cl::init(false), cl::Hidden,
     cl::desc("[LICM & Ownsem] Do not promote only loads."));
-static bool isOwnsemEnabled(bool IsVectorizationDone) {
-  return LicmUsesOwnSem && (!LicmOwnSemOnlyAfterVectorization ||
+static bool isOwnsemEnabled(bool IsVectorizationDone, bool OwnsemSemantics) {
+  return LicmUsesOwnSem && OwnsemSemantics &&
+         (!LicmOwnSemOnlyAfterVectorization ||
                             (LicmOwnSemOnlyAfterVectorization &&
                              IsVectorizationDone));
 }
@@ -231,7 +232,7 @@ static bool pointerInvalidatedByBlock(BasicBlock &BB, MemorySSA &MSSA,
 static bool hoistArithmetics(Instruction &I, Loop &L,
                              ICFLoopSafetyInfo &SafetyInfo,
                              MemorySSAUpdater &MSSAU, AssumptionCache *AC,
-                             DominatorTree *DT);
+                             DominatorTree *DT, bool OwnsemEnabled = false);
 static Instruction *cloneInstructionInExitBlock(
     Instruction &I, BasicBlock &ExitBlock, PHINode &PN, const LoopInfo *LI,
     const LoopSafetyInfo *SafetyInfo, MemorySSAUpdater &MSSAU);
@@ -249,7 +250,8 @@ using PointersAndHasReadsOutsideSet =
     std::tuple<SmallSetVector<Value *, 8>, bool, bool /* safeset */>;
 static SmallVector<PointersAndHasReadsOutsideSet, 0>
 collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L, DominatorTree *DT,
-                          OptimizationRemarkEmitter *ORE, bool IsVectorizationDone);
+                          OptimizationRemarkEmitter *ORE, bool IsVectorizationDone,
+                          bool OwnsemSemantics = false);
 
 namespace {
 struct LoopInvariantCodeMotion {
@@ -261,17 +263,20 @@ struct LoopInvariantCodeMotion {
   LoopInvariantCodeMotion(unsigned LicmMssaOptCap,
                           unsigned LicmMssaNoAccForPromotionCap,
                           bool LicmAllowSpeculation,
-                          bool IsVectorizationDone)
+                          bool IsVectorizationDone,
+                          bool OwnsemSemantics = false)
       : LicmMssaOptCap(LicmMssaOptCap),
         LicmMssaNoAccForPromotionCap(LicmMssaNoAccForPromotionCap),
         LicmAllowSpeculation(LicmAllowSpeculation),
-        LicmIsVectorizationDone(IsVectorizationDone) {}
+        LicmIsVectorizationDone(IsVectorizationDone),
+        LicmOwnsemSemantics(OwnsemSemantics) {}
 
 private:
   unsigned LicmMssaOptCap;
   unsigned LicmMssaNoAccForPromotionCap;
   bool LicmAllowSpeculation;
   bool LicmIsVectorizationDone;
+  bool LicmOwnsemSemantics;
 };
 
 struct LegacyLICMPass : public LoopPass {
@@ -345,7 +350,8 @@ PreservedAnalyses LICMPass::run(Loop &L, LoopAnalysisManager &AM,
   OptimizationRemarkEmitter ORE(L.getHeader()->getParent());
 
   LoopInvariantCodeMotion LICM(Opts.MssaOptCap, Opts.MssaNoAccForPromotionCap,
-                               Opts.AllowSpeculation, Opts.IsVectorizationDone);
+                               Opts.AllowSpeculation, Opts.IsVectorizationDone,
+                               Opts.OwnsemSemantics);
   if (!LICM.runOnLoop(&L, &AR.AA, &AR.LI, &AR.DT, &AR.AC, &AR.TLI, &AR.TTI,
                       &AR.SE, AR.MSSA, &ORE))
     return PreservedAnalyses::all();
@@ -366,6 +372,7 @@ void LICMPass::printPipeline(
      ? "vectorization-done"
      : "vectorization-not-done");
   OS << (Opts.AllowSpeculation ? ";" : ";no-") << "allowspeculation";
+  OS << (Opts.OwnsemSemantics ? ";" : ";no-") << "ownsem-semantics";
   OS << '>';
 }
 
@@ -382,7 +389,8 @@ PreservedAnalyses LNICMPass::run(LoopNest &LN, LoopAnalysisManager &AM,
   OptimizationRemarkEmitter ORE(LN.getParent());
 
   LoopInvariantCodeMotion LICM(Opts.MssaOptCap, Opts.MssaNoAccForPromotionCap,
-                               Opts.AllowSpeculation, Opts.IsVectorizationDone);
+                               Opts.AllowSpeculation, Opts.IsVectorizationDone,
+                               Opts.OwnsemSemantics);
 
   Loop &OutermostLoop = LN.getOutermostLoop();
   bool Changed = LICM.runOnLoop(&OutermostLoop, &AR.AA, &AR.LI, &AR.DT, &AR.AC,
@@ -507,14 +515,17 @@ bool LoopInvariantCodeMotion::runOnLoop(Loop *L, AAResults *AA, LoopInfo *LI,
     Changed |=
         LoopNestMode
             ? sinkRegionForLoopNest(DT->getNode(L->getHeader()), AA, LI, DT,
-                                    TLI, TTI, L, MSSAU, &SafetyInfo, Flags, ORE)
+                                    TLI, TTI, L, MSSAU, &SafetyInfo, Flags, ORE,
+                                    isOwnsemEnabled(LicmIsVectorizationDone, LicmOwnsemSemantics))
             : sinkRegion(DT->getNode(L->getHeader()), AA, LI, DT, TLI, TTI, L,
-                         MSSAU, &SafetyInfo, Flags, ORE);
+                         MSSAU, &SafetyInfo, Flags, ORE, nullptr,
+                         isOwnsemEnabled(LicmIsVectorizationDone, LicmOwnsemSemantics));
   Flags.setIsSink(false);
   if (Preheader)
     Changed |= hoistRegion(DT->getNode(L->getHeader()), AA, LI, DT, AC, TLI, L,
                            MSSAU, SE, &SafetyInfo, Flags, ORE, LoopNestMode,
-                           LicmAllowSpeculation);
+                           LicmAllowSpeculation,
+                           isOwnsemEnabled(LicmIsVectorizationDone, LicmOwnsemSemantics));
 
   // Now that all loop invariants have been removed from the loop, promote any
   // memory references to scalars that we can.
@@ -553,11 +564,13 @@ bool LoopInvariantCodeMotion::runOnLoop(Loop *L, AAResults *AA, LoopInfo *LI,
       do {
         LocalPromoted = false;
         for (auto [PointerMustAliases, HasReadsOutsideSet, IsSafeSet] :
-             collectPromotionCandidates(MSSA, AA, L, DT, ORE, LicmIsVectorizationDone)) {
+             collectPromotionCandidates(MSSA, AA, L, DT, ORE, LicmIsVectorizationDone,
+                                        LicmOwnsemSemantics)) {
           LocalPromoted |= promoteLoopAccessesToScalars(
               PointerMustAliases, ExitBlocks, InsertPts, MSSAInsertPts, PIC, LI,
               DT, AC, TLI, TTI, L, MSSAU, &SafetyInfo, ORE,
-              LicmAllowSpeculation, HasReadsOutsideSet, IsSafeSet, LicmIsVectorizationDone);
+              LicmAllowSpeculation, HasReadsOutsideSet, IsSafeSet, LicmIsVectorizationDone,
+              LicmOwnsemSemantics);
         }
         Promoted |= LocalPromoted;
       } while (LocalPromoted);
@@ -600,7 +613,8 @@ bool llvm::sinkRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
                       TargetTransformInfo *TTI, Loop *CurLoop,
                       MemorySSAUpdater &MSSAU, ICFLoopSafetyInfo *SafetyInfo,
                       SinkAndHoistLICMFlags &Flags,
-                      OptimizationRemarkEmitter *ORE, Loop *OutermostLoop) {
+                      OptimizationRemarkEmitter *ORE, Loop *OutermostLoop,
+                      bool OwnsemEnabled) {
 
   // Verify inputs.
   assert(N != nullptr && AA != nullptr && LI != nullptr && DT != nullptr &&
@@ -642,7 +656,14 @@ bool llvm::sinkRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
       //
       bool FoldableInLoop = false;
       bool LoopNestMode = OutermostLoop != nullptr;
+
+      // OWNSEM: Prevent sinking GEPs out of the loop. Although sinking would
+      // be sound under Stacked Borrows (the tag would be created later, seeing
+      // fewer preceding stores), we treat GEPs as side-effecting here to keep
+      // the tag's live range entirely within the loop and avoid any interaction
+      // with post-loop code that ownsem metadata may need to reason about.
       if (!I.mayHaveSideEffects() &&
+          !(OwnsemEnabled && isa<GetElementPtrInst>(I)) &&
           isNotUsedOrFoldableInLoop(I, LoopNestMode ? OutermostLoop : CurLoop,
                                     SafetyInfo, TTI, FoldableInLoop,
                                     LoopNestMode) &&
@@ -669,7 +690,8 @@ bool llvm::sinkRegionForLoopNest(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
                                  MemorySSAUpdater &MSSAU,
                                  ICFLoopSafetyInfo *SafetyInfo,
                                  SinkAndHoistLICMFlags &Flags,
-                                 OptimizationRemarkEmitter *ORE) {
+                                 OptimizationRemarkEmitter *ORE,
+                                 bool OwnsemEnabled) {
 
   bool Changed = false;
   SmallPriorityWorklist<Loop *, 4> Worklist;
@@ -678,7 +700,7 @@ bool llvm::sinkRegionForLoopNest(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
   while (!Worklist.empty()) {
     Loop *L = Worklist.pop_back_val();
     Changed |= sinkRegion(DT->getNode(L->getHeader()), AA, LI, DT, TLI, TTI, L,
-                          MSSAU, SafetyInfo, Flags, ORE, CurLoop);
+                          MSSAU, SafetyInfo, Flags, ORE, CurLoop, OwnsemEnabled);
   }
   return Changed;
 }
@@ -923,7 +945,7 @@ bool llvm::hoistRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
                        ICFLoopSafetyInfo *SafetyInfo,
                        SinkAndHoistLICMFlags &Flags,
                        OptimizationRemarkEmitter *ORE, bool LoopNestMode,
-                       bool AllowSpeculation) {
+                       bool AllowSpeculation, bool OwnsemEnabled) {
   // Verify inputs.
   assert(N != nullptr && AA != nullptr && LI != nullptr && DT != nullptr &&
          CurLoop != nullptr && SafetyInfo != nullptr &&
@@ -1030,7 +1052,7 @@ bool llvm::hoistRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
 
       // Try to reassociate instructions so that part of computations can be
       // done out of loop.
-      if (hoistArithmetics(I, *CurLoop, *SafetyInfo, MSSAU, AC, DT)) {
+      if (hoistArithmetics(I, *CurLoop, *SafetyInfo, MSSAU, AC, DT, OwnsemEnabled)) {
         Changed = true;
         continue;
       }
@@ -1802,7 +1824,11 @@ static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
       // drop.  It is a compile time optimization, not required for correctness.
       !SafetyInfo->isGuaranteedToExecute(I, DT, CurLoop))
     I.dropUBImplyingAttrsAndMetadata();
-
+  // Always drop the ownsem metadata during hoisting, regardless of whether
+  // the instruction is guaranteed to execute. This ensures ownership
+  // semantics metadata doesn't create issues when code is moved.
+  if (OwnsemMetadata)
+    I.setMetadata(OwnsemKind, nullptr);
   if (isa<PHINode>(I))
     // Move the new node to the end of the phi list in the destination block.
     moveInstructionBefore(I, Dest->getFirstNonPHIIt(), *SafetyInfo, MSSAU, SE);
@@ -1810,11 +1836,12 @@ static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
     // Move the new node to the destination block, before its terminator.
     moveInstructionBefore(I, Dest->getTerminator()->getIterator(), *SafetyInfo,
                           MSSAU, SE);
+  // TODO(ownsem): hoisting conditional gep is unsound under SB, disable for now.                        
   // ownsem: we assumethat hoisting does not invalidate
   // ownership data
-  if (OwnsemMetadata) {
-    I.setMetadata(OwnsemKind, OwnsemMetadata);
-  }
+  // if (OwnsemMetadata) {
+  //   I.setMetadata(OwnsemKind, OwnsemMetadata);
+  // }
   I.updateLocationAfterHoist();
 
   if (isa<LoadInst>(I))
@@ -2018,7 +2045,8 @@ bool llvm::promoteLoopAccessesToScalars(
     const TargetLibraryInfo *TLI, TargetTransformInfo *TTI, Loop *CurLoop,
     MemorySSAUpdater &MSSAU, ICFLoopSafetyInfo *SafetyInfo,
     OptimizationRemarkEmitter *ORE, bool AllowSpeculation,
-    bool HasReadsOutsideSet, bool IsSafeSet, bool IsVectorizationDone) {
+    bool HasReadsOutsideSet, bool IsSafeSet, bool IsVectorizationDone,
+    bool OwnsemSemantics) {
   // Verify inputs.
   assert(LI != nullptr && DT != nullptr && CurLoop != nullptr &&
          SafetyInfo != nullptr &&
@@ -2107,7 +2135,7 @@ bool llvm::promoteLoopAccessesToScalars(
     Value *Object = getUnderlyingObject(SomePtr);
     // OWNSEM: if set is safe then don't upgrade StoreSafety since owned, borrowed
     // pointers are assumed dead on unwind.
-    if (isOwnsemEnabled(IsVectorizationDone) &&
+    if (isOwnsemEnabled(IsVectorizationDone, OwnsemSemantics) &&
       LicmOwnSemSafeSetIgnoresThrow &&
       IsSafeSet) {
       // do nothing
@@ -2191,7 +2219,7 @@ bool llvm::promoteLoopAccessesToScalars(
             llvm::all_of(ExitBlocks, [&](BasicBlock *Exit) {
               // A safeset guarantees that there are no observers of the store outside
               // the aliasset within the loop, so count landingpads as don't care.
-              if (isOwnsemEnabled(IsVectorizationDone) &&
+              if (isOwnsemEnabled(IsVectorizationDone, OwnsemSemantics) &&
                   LicmOwnSemSafeSetIgnoresThrow &&
                   IsSafeSet &&
                   isa<LandingPadInst>(Exit->getFirstNonPHIOrDbgOrLifetime())) {
@@ -2215,8 +2243,9 @@ bool llvm::promoteLoopAccessesToScalars(
         // 2.2   - transmuting to a number and sending it across and transmuting again to a mutref/owned pointer
         // 3. The ptrs are not moved to another thread within the loop since collectPromotionCandidates would filter that out.
         // 4. The ptrs are moved to another thread after the loop and before the store instruction is inserted.
-        if(isOwnsemEnabled(IsVectorizationDone) &&
+        if(isOwnsemEnabled(IsVectorizationDone, OwnsemSemantics) &&
           LicmOwnSemSafeStoreThreadSafe &&
+          DereferenceableInPH &&
           IsSafeSet &&
           StoreSafety == StoreSafetyUnknown) {
           StoreSafety = StoreSafe;
@@ -2374,7 +2403,8 @@ static void foreachMemoryAccess(MemorySSA *MSSA, Loop *L,
 // case only loads may be promoted.
 static SmallVector<PointersAndHasReadsOutsideSet, 0>
 collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L, DominatorTree *DT,
-    OptimizationRemarkEmitter *ORE, bool IsVectorizationDone) {
+    OptimizationRemarkEmitter *ORE, bool IsVectorizationDone,
+    bool OwnsemSemantics) {
   BatchAAResults BatchAA(*AA);
   AliasSetTracker AST(BatchAA);
 
@@ -2398,8 +2428,11 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L, Dominato
   // We're only interested in must-alias sets that contain a mod.
   SmallVector<PointerIntPair<PointerIntPair<const AliasSet *, 1, bool>, 1, bool /* safeset */>, 8> Sets;
   for (AliasSet &AS : AST)
-    if (!AS.isForwardingAliasSet() && AS.isMod() && AS.isMustAlias())
-      Sets.push_back({{&AS, false}, false /* safe set*/});
+    if (!AS.isForwardingAliasSet() && AS.isMod() && AS.isMustAlias()) {
+      bool SafeSet = isOwnsemEnabled(IsVectorizationDone, OwnsemSemantics) ?
+                     AS.hasOnlyOwnsemMutBorPointers().first : false;
+      Sets.push_back({{&AS, false}, SafeSet});
+    }
   if (Sets.empty())
     return {}; // Nothing to promote...
 
@@ -2477,17 +2510,15 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L, Dominato
     //         to the memory behind the alias set. This is because of INVARIANT 1.
     // Row 2 - If AS is read-only then Func can only be read-only or no mem access because of INVARIANT 2.
     auto MayAliasOutSideSetOwnsem = [&](PointerIntPair<PointerIntPair<const AliasSet *, 1, bool>, 1, bool /* safeset*/> &Pairpair) {
-      auto Pair = Pairpair.getPointer();
-      auto UnsafePair = Pair.getPointer()->hasUnsafeOwnsemAccesses();
-      Pairpair.setInt(!UnsafePair.first); /* set set safety info */
       if (!LicmOwnSemAS) {
         // If we are not using ownsem then fallback to default impl.
         return MayAliasOutsideSetDefault(Pairpair);
       }
+      auto Pair = Pairpair.getPointer();
       ModRefInfo MR = Pair.getPointer()->aliasesUnknownInst(I, BatchAA);
-      bool SafeSet = !UnsafePair.first;
+      bool SafeSet = Pairpair.getInt();
       LLVM_DEBUG(dbgs() << "Collect promotables, set Unsafety is: " << !SafeSet
-      << " found ownsem: " << UnsafePair.second << "\n";);
+      << "\n";);
       // Pair.getPointer()->print(OS);
       LLVM_DEBUG(dbgs() << "Aliases unknown instr: " << *I << " mod: "
       << isModSet(MR) << " ref:" << isRefSet(MR) << "\n";);
@@ -2541,7 +2572,7 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L, Dominato
     };
 
 
-    if (isOwnsemEnabled(IsVectorizationDone)) {
+    if (isOwnsemEnabled(IsVectorizationDone, OwnsemSemantics)) {
       llvm::erase_if(Sets, MayAliasOutSideSetOwnsem);
     } else {
       llvm::erase_if(Sets, MayAliasOutsideSetDefault);
@@ -2698,7 +2729,12 @@ static bool hoistMinMax(Instruction &I, Loop &L, ICFLoopSafetyInfo &SafetyInfo,
 /// this allows hoisting the inner GEP.
 static bool hoistGEP(Instruction &I, Loop &L, ICFLoopSafetyInfo &SafetyInfo,
                      MemorySSAUpdater &MSSAU, AssumptionCache *AC,
-                     DominatorTree *DT) {
+                     DominatorTree *DT, bool OwnsemEnabled) {
+  // OWNSEM: GEP hoisting to the preheader would place the ownsem tag before
+  // all loop-body stores, making it unsound. Skip when ownsem is active.
+  if (OwnsemEnabled)
+    return false;
+
   auto *GEP = dyn_cast<GetElementPtrInst>(&I);
   if (!GEP)
     return false;
@@ -2958,7 +2994,7 @@ static bool hoistFPAssociation(Instruction &I, Loop &L,
 static bool hoistArithmetics(Instruction &I, Loop &L,
                              ICFLoopSafetyInfo &SafetyInfo,
                              MemorySSAUpdater &MSSAU, AssumptionCache *AC,
-                             DominatorTree *DT) {
+                             DominatorTree *DT, bool OwnsemEnabled) {
   // Optimize complex patterns, such as (x < INV1 && x < INV2), turning them
   // into (x < min(INV1, INV2)), and hoisting the invariant part of this
   // expression out of the loop.
@@ -2969,7 +3005,7 @@ static bool hoistArithmetics(Instruction &I, Loop &L,
   }
 
   // Try to hoist GEPs by reassociation.
-  if (hoistGEP(I, L, SafetyInfo, MSSAU, AC, DT)) {
+  if (hoistGEP(I, L, SafetyInfo, MSSAU, AC, DT, OwnsemEnabled)) {
     ++NumHoisted;
     ++NumGEPsHoisted;
     return true;
