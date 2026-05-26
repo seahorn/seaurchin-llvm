@@ -30,14 +30,17 @@ jobs:
       - name: Checkout LLVM
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
+      - name: Log in to ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker login -u ${{ github.actor }} -p $GITHUB_TOKEN ghcr.io
+
       - name: Build seaurchin-llvm-builder Container
         run: |
           docker build -f docker/seaurchin-llvm-builder.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
           docker tag ${{ steps.vars.outputs.container-name-tag }} ${{ steps.vars.outputs.container-name }}:latest
 
       - name: Push seaurchin-llvm-builder Container
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          docker login -u ${{ github.actor }} -p $GITHUB_TOKEN ghcr.io
           docker push ${{ steps.vars.outputs.container-name-tag }}
