@@ -16,7 +16,7 @@ jobs:
     runs-on: seaurchin-big
     if: github.repository == 'seahorn/seaurchin-llvm'
     container:
-      image: ghcr.io/seahorn/seaurchin-llvm/seaurchin-llvm-builder:latest
+      image: ghcr.io/seahorn/seaurchin-llvm/buildpack-deps-seaurchin:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
