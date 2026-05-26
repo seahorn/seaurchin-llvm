@@ -6,84 +6,43 @@ permissions:
 
 on:
   workflow_dispatch:
+  push:
     branches:
       - dev-18
-    inputs:
-      release-version:
-        description: 'Release Version'
-        required: true
-        type: string
-      upload:
-        description: 'Upload binaries to the release page'
-        required: true
-        default: false
-        type: boolean  
 
 jobs:
-  prepare:
-    name: Prepare to build binaries
-    runs-on: self-hosted
-    if: github.repository == 'seahorn/seaurchin-llvm'
-    outputs:
-      release-version: ${{ steps.vars.outputs.release-version }}
-      ref: ${{ steps.vars.outputs.ref }}
-      upload: ${{ steps.vars.outputs.upload }}
-
-    steps:
-    - name: Checkout LLVM
-      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-
-    - name: Install Dependencies
-      run: |
-        pip install -r ./llvm/utils/git/requirements.txt
-
   build-seaurchin-llvm-linux:
     name: "Build seaurchin-llvm Linux"
-    needs: prepare
-    runs-on: self-hosted
+    runs-on: seaurchin-big
     if: github.repository == 'seahorn/seaurchin-llvm'
+    container:
+      image: ghcr.io/seahorn/seaurchin-llvm/seaurchin-llvm-builder:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      BUILD_DIR: /mnt/build
+      INSTALL_DIR: /mnt/install
+      INSTALL_ARCHIVE: seaurchin-llvm-assert-install-dev18.tar.zst
+
     steps:
     - name: Checkout LLVM
       uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-      with:
-        ref: ${{ needs.prepare.outputs.ref }}
 
-    # - name: Install Ninja
-    #   uses: llvm/actions/install-ninja@22e9f909d35b50bd1181709564bfe816eaeaae81 # main
-
-    # - name: Setup sccache
-    #   uses: hendrikmuhs/ccache-action@v1.2
-    #   with:
-    #     max-size: 250M
-    #     key: sccache-${{ runner.os }}-release
-    #     variant: sccache
-
-    - name: Build/test seaurchin-llvm
+    - name: Build/test/install seaurchin-llvm
       run: |
-        mkdir mnt
-        chown $USER:$USER mnt/
-        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=mnt/install llvm -B mnt/build
-        ninja -v -C mnt/build 
-        ninja -v -C mnt/build check-llvm
-        ninja -v -C mnt/build install 
-
-    # We need to create an archive of the build directory, because it has too
-    # many files to upload.
-    - name: Package Build and Source Directories
-      run: |
-        tar -c . | zstd -T0 -c > seaurchin-llvm-project.tar.zst
-        tar -C mnt/ -c install/ | zstd -T0 -c > seaurchin-llvm-assert-install.tar.zst
-
-    - name: Upload seaurchin-llvm Source
-      uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 #v4.3.0
-      with:
-        name: seaurchin-llvm-source
-        path: seaurchin-llvm-project.tar.zst
-        retention-days: 30
+        echo "Showing last 3 commits in LLVM repo:"
+        git log -n 3 --oneline
+        mkdir -p /mnt && chown -R $(id -u):$(id -g) /mnt
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR llvm -B $BUILD_DIR
+        ninja -v -C $BUILD_DIR
+        ninja -v -C $BUILD_DIR check-llvm
+        ninja -v -C $BUILD_DIR install
+        tar -C /mnt/ -c install/ | zstd -T0 -c > $INSTALL_ARCHIVE
 
     - name: Upload seaurchin-llvm installdir
       uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 #v4.3.0
       with:
         name: seaurchin-llvm-assert-install
-        path: seaurchin-llvm-assert-install.tar.zst
+        path: ${{ env.INSTALL_ARCHIVE }}
         retention-days: 30

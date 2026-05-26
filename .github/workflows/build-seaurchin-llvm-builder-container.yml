@@ -1,0 +1,43 @@
+
+name: Build seaurchin-llvm-builder Container
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev-18
+    paths:
+      - .github/workflows/build-seaurchin-llvm-builder-container.yml
+      - 'docker/seaurchin-llvm-builder.dockerfile'
+
+jobs:
+  build-seaurchin-llvm-builder-container:
+    if: github.repository_owner == 'seahorn'
+    runs-on: seaurchin-big
+    permissions:
+      packages: write
+    steps:
+      - name: Write Variables
+        id: vars
+        run: |
+          container_name="ghcr.io/$GITHUB_REPOSITORY_OWNER/seaurchin-llvm/seaurchin-llvm-builder"
+          echo "container-name-tag=$container_name:latest" >> $GITHUB_OUTPUT
+          echo "container-name=$container_name" >> $GITHUB_OUTPUT
+
+      - name: Checkout LLVM
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Build seaurchin-llvm-builder Container
+        run: |
+          docker build -f docker/seaurchin-llvm-builder.dockerfile -t ${{ steps.vars.outputs.container-name-tag }} .
+          docker tag ${{ steps.vars.outputs.container-name-tag }} ${{ steps.vars.outputs.container-name }}:latest
+
+      - name: Push seaurchin-llvm-builder Container
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker login -u ${{ github.actor }} -p $GITHUB_TOKEN ghcr.io
+          docker push ${{ steps.vars.outputs.container-name-tag }}
