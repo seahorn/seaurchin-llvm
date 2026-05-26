@@ -3,6 +3,7 @@ name: Build seaurchin-llvm binaries w assert
 
 permissions:
   contents: read
+  packages: read
 
 on:
   workflow_dispatch:
