@@ -25,10 +25,20 @@ jobs:
       BUILD_DIR: /mnt/build
       INSTALL_DIR: /mnt/install
       INSTALL_ARCHIVE: seaurchin-llvm-assert-install-dev18.tar.zst
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: 4G
 
     steps:
     - name: Checkout LLVM
       uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Restore sccache
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.sccache
+        key: sccache-${{ runner.os }}-llvm-assert-${{ github.sha }}
+        restore-keys: |
+          sccache-${{ runner.os }}-llvm-assert-
 
     - name: Build/test/install seaurchin-llvm
       run: |
@@ -36,11 +46,12 @@ jobs:
         echo "Showing last 3 commits in LLVM repo:"
         git log -n 3 --oneline
         mkdir -p /mnt && chown -R $(id -u):$(id -g) /mnt
-        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR llvm -B $BUILD_DIR
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_FORCE_ENABLE_STATS=ON -DLLVM_INSTALL_UTILS=ON -DLLVM_ENABLE_ZSTD=No -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR llvm -B $BUILD_DIR
         ninja -v -C $BUILD_DIR
         ninja -v -C $BUILD_DIR check-llvm
         ninja -v -C $BUILD_DIR install
         tar -C /mnt/ -c install/ | zstd -T0 -c > $INSTALL_ARCHIVE
+        sccache --show-stats
 
     - name: Upload seaurchin-llvm installdir
       uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 #v4.3.0
