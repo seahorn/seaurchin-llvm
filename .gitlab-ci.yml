@@ -9,12 +9,8 @@ variables:
 
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "web"
-      when: always
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev-18"
-      when: always
-    - if: $CI_PIPELINE_SOURCE == "trigger"
-      when: always
+    # GitLab CI disabled; pipeline is mirrored in GitHub Actions
+    # (.github/workflows/build-seaurchin-llvm-assert-bin.yml).
     - when: never
 
 sync-from-github:
