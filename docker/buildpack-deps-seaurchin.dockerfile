@@ -30,4 +30,12 @@ RUN apt-get update && \
   mkdir seaurchin-llvm
 RUN wget -qO- https://apt.llvm.org/llvm.sh | bash -s -- 18
 
+# Install sccache for caching compiler output in CI
+ARG SCCACHE_VERSION=0.8.2
+RUN curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+    | tar -xz -C /tmp && \
+    mv "/tmp/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/bin/sccache && \
+    chmod +x /usr/local/bin/sccache && \
+    rm -rf "/tmp/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
+
 WORKDIR /seaurchin-llvm
