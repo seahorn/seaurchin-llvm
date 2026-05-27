@@ -1,6 +1,6 @@
 ; NOTE: Tests that store through borrowed gep ptr is sunk outside the loop into exit block.
 ; NOTE: This is even in the presence of external call "cond" that may unwind *implicitly*.
-; RUN: opt -S -passes=licm --licm-uses-ownsem --licm-ownsem-safeset-ignores-throw < %s | FileCheck %s
+; RUN: opt -S -passes='licm<ownsem-semantics>' --licm-uses-ownsem --licm-ownsem-safeset-ignores-throw=true --licm-ownsem-safeset-store-threadsafe < %s | FileCheck %s
 ; Function Attrs: noinline nounwind nonlazybind uwtable
 define hidden fastcc void @cond_inc(ptr noalias nocapture noundef align 4 dereferenceable(8) %b) unnamed_addr #0 !dbg !8 {
 ; CHECK-LABEL: @cond_inc(

@@ -1,6 +1,6 @@
 ; NOTE: Tests that store through borrowed gep ptr is sunk outside the loop into exit block.
 ; NOTE: This is even in the presence of external call "cond" that may unwind through an *explicit* path.
-; RUN: opt -S -passes=licm --licm-uses-ownsem --licm-ownsem-safeset-ignores-throw < %s | FileCheck %s
+; RUN: opt -S -passes='licm<ownsem-semantics>' --licm-uses-ownsem --licm-ownsem-safeset-ignores-throw=true --licm-ownsem-safeset-store-threadsafe < %s | FileCheck %s
 ; Function Attrs: noinline nounwind nonlazybind uwtable
 
 ; Function Attrs: nounwind nonlazybind uwtable

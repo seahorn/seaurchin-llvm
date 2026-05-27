@@ -4,7 +4,7 @@
 ; CHECK-0: function(adce),function(adce)
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='module(rpo-function-attrs,require<globals-aa>,function(float2int,lower-constant-intrinsics,loop(loop-rotate)),invalidate<globals-aa>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-1
-; CHECK-1: rpo-function-attrs,require<globals-aa>,function(float2int,lower-constant-intrinsics,loop(loop-rotate<header-duplication;no-prepare-for-lto>)),invalidate<globals-aa>
+; CHECK-1: rpo-function-attrs,require<globals-aa>,function(float2int,lower-constant-intrinsics,loop(loop-rotate<header-duplication;no-prepare-for-lto;no-ownsem-semantics>)),invalidate<globals-aa>
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='repeat<5>(function(mem2reg)),invalidate<all>' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-2
 ; CHECK-2: repeat<5>(function(mem2reg)),invalidate<all>
@@ -69,7 +69,7 @@
 
 ;; Test that the loop-nest-pass lnicm is printed with the other loop-passes in the pipeline.
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(loop-mssa(licm,loop-rotate,loop-deletion,lnicm,loop-rotate))' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-23
-; CHECK-23: function(loop-mssa(licm<vectorization-not-done;allowspeculation>,loop-rotate<header-duplication;no-prepare-for-lto>,loop-deletion,lnicm<allowspeculation>,loop-rotate<header-duplication;no-prepare-for-lto>))
+; CHECK-23: function(loop-mssa(licm<vectorization-not-done;allowspeculation;no-ownsem-semantics>,loop-rotate<header-duplication;no-prepare-for-lto;no-ownsem-semantics>,loop-deletion,lnicm<allowspeculation>,loop-rotate<header-duplication;no-prepare-for-lto;no-ownsem-semantics>))
 
 ;; Test that -debugify and -check-debugify is printed correctly.
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='debugify,no-op-function,check-debugify' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-24
@@ -78,7 +78,7 @@
 
 ;; Test that LICM & LNICM with options.
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(loop-mssa(licm<vectorization-not-done;allowspeculation>,licm<vectorization-not-done;no-allowspeculation>,lnicm<allowspeculation>,lnicm<no-allowspeculation>))' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-25
-; CHECK-25: function(loop-mssa(licm<vectorization-not-done;allowspeculation>,licm<vectorization-not-done;no-allowspeculation>,lnicm<allowspeculation>,lnicm<no-allowspeculation>))
+; CHECK-25: function(loop-mssa(licm<vectorization-not-done;allowspeculation;no-ownsem-semantics>,licm<vectorization-not-done;no-allowspeculation;no-ownsem-semantics>,lnicm<allowspeculation>,lnicm<no-allowspeculation>))
 
 ;; Test coro-cond.
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='coro-cond(no-op-module)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-26
@@ -96,7 +96,7 @@
 
 ;; Test InstCombine options - the first pass checks default settings, and the second checks customized options.
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(instcombine,instcombine<use-loop-info;no-verify-fixpoint;max-iterations=42>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-28
-; CHECK-28: function(instcombine<max-iterations=1;no-use-loop-info;verify-fixpoint>,instcombine<max-iterations=42;use-loop-info;no-verify-fixpoint>)
+; CHECK-28: function(instcombine<max-iterations=1;no-use-loop-info;verify-fixpoint;no-ownsem-semantics>,instcombine<max-iterations=42;use-loop-info;no-verify-fixpoint;no-ownsem-semantics>)
 
 ;; Test function-attrs
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='cgscc(function-attrs<skip-non-recursive-function-attrs>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-29
@@ -113,7 +113,7 @@
 ; CHECK-32: cgscc(function<no-rerun>(no-op-function))
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(loop(loop-rotate<no-header-duplication;no-prepare-for-lto>))' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-33
-; CHECK-33: function(loop(loop-rotate<no-header-duplication;no-prepare-for-lto>))
+; CHECK-33: function(loop(loop-rotate<no-header-duplication;no-prepare-for-lto;no-ownsem-semantics>))
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='globaldce' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-34
 ; CHECK-34: globaldce
