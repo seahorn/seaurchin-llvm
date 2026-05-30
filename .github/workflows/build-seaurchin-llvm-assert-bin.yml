@@ -59,3 +59,16 @@ jobs:
         name: seaurchin-llvm-assert-install
         path: ${{ env.INSTALL_ARCHIVE }}
         retention-days: 30
+
+    - name: Package seaurchin-llvm source
+      run: |
+        tar --exclude=./.sccache --exclude="./$INSTALL_ARCHIVE" \
+          -C "$GITHUB_WORKSPACE" -c . \
+          | zstd -T0 -c > /tmp/seaurchin-llvm-project.tar.zst
+
+    - name: Upload seaurchin-llvm source
+      uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 #v4.3.0
+      with:
+        name: seaurchin-llvm-source
+        path: /tmp/seaurchin-llvm-project.tar.zst
+        retention-days: 30
