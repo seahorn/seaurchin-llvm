@@ -4,12 +4,13 @@
 # Used by the CI to start the build
 #
 
-ARG BASE_IMAGE=jammy-scm
+ARG BASE_IMAGE=noble-scm
 # Base image with usual build dependencies
 FROM buildpack-deps:$BASE_IMAGE
 
 # Install dependencies
 ARG DEBIAN_FRONTEND=noninteractive
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 RUN apt-get update && \
   apt-get install -yqq software-properties-common && \
   apt-get update && \
@@ -17,7 +18,7 @@ RUN apt-get update && \
   apt-get install -yqq cmake cmake-data unzip \
       zlib1g-dev \
       ninja-build libgraphviz-dev \
-      libboost1.74-dev \
+      libboost1.83-dev \
       python3-pip \
       less vim \
       gcc-multilib \
